@@ -2,6 +2,8 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
+use aprox_derive::AproxEq;
+use aprox_eq::AproxEq;
 use std::f64;
 
 const FR_ANG: f64 = -f64::consts::FRAC_PI_4;
@@ -10,7 +12,7 @@ const BR_ANG: f64 = f64::consts::FRAC_PI_4;
 const BL_ANG: f64 = -f64::consts::FRAC_PI_4;
 
 /// Represents a complete movement in translation and rotation.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(AproxEq, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DriveVector {
     /// The angle of translation in radians.
     pub angle: f64,
@@ -24,7 +26,7 @@ pub struct DriveVector {
 
 /// Represents a single frame of the drive train's state and holds data for all
 /// four motors/wheels.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(AproxEq, Clone, Copy, Debug, Default, PartialEq)]
 pub struct DriveState {
     fr: f64,
     fl: f64,
@@ -120,8 +122,7 @@ pub fn calc_4_axes_drive(x: f64, y: f64, rotation: f64, speed: f64) -> (DriveVec
 #[cfg(test)]
 mod tests {
     use crate::drive;
-
-    const MAX_ERR: f64 = 0.000000001;
+    use aprox_eq::assert_aprox_eq;
 
     #[test]
     fn constructor() {
@@ -131,9 +132,9 @@ mod tests {
             let vec = drive::DriveVector::from_3_axes(0_f64, x, 0_f64);
             let state = drive::DriveState::new(vec);
 
-            assert!(f64::abs(state.fr - state.fl) < MAX_ERR);
-            assert!(f64::abs(state.br - state.bl) < MAX_ERR);
-            assert!(f64::abs(state.fr - state.br) < MAX_ERR);
+            assert_aprox_eq!(state.fr, state.fl);
+            assert_aprox_eq!(state.br, state.bl);
+            assert_aprox_eq!(state.fr, state.br);
 
             assert!(state.fr <= 1_f64);
             assert!(state.fl <= 1_f64);
