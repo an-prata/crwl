@@ -2,8 +2,6 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-mod controller;
-
 use gilrs::{Axis, Gilrs};
 use mecanum::{DriveState, DriveVector};
 
