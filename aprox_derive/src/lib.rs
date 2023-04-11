@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-// NOTE: If ever the proc-macro stuff can be put in the same crate as otehr code
+// NOTE: If ever the proc-macro stuff can be put in the same crate as other code
 // that should be public this stuff should get moved to aprox_eq.
 
 use proc_macro::TokenStream;
