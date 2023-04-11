@@ -17,18 +17,13 @@ use std::{
 /// will be less that one full rotation.
 #[derive(AproxEq, Clone, Debug, Copy, PartialEq, Default)]
 pub struct Angle {
-    fraction: f64,
+    /// The fraction of a circle that this angle represents, all other
+    /// measurements are derrived by converting this value, which is kept
+    /// between -1 and 1 to reduce floating point error.
+    pub fraction: f64,
 }
 
 impl Angle {
-    /// Creates a new angle given the fraction the angle should be around a
-    /// circle. 90 degrees is 0.25, 360 is 1.0, etc.
-    pub fn from_fraction(fraction: f64) -> Self {
-        Angle {
-            fraction: fraction % 1f64,
-        }
-    }
-
     /// Creates a new angle given radians.
     pub fn from_radians(radians: f64) -> Self {
         Angle {
@@ -49,11 +44,6 @@ impl Angle {
         Angle {
             fraction: (f64::atan2(y, x) / f64::consts::TAU) % 1f64,
         }
-    }
-
-    /// Returns the fraction of a circle that this angle would cover.
-    pub fn fraction(&self) -> f64 {
-        self.fraction
     }
 
     /// Gets the radian representation of the angle.
