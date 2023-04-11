@@ -9,10 +9,25 @@ use aprox_derive::AproxEq;
 use aprox_eq::AproxEq;
 use std::f64;
 
-const FR_ANG: f64 = -f64::consts::FRAC_PI_4;
-const FL_ANG: f64 = f64::consts::FRAC_PI_4;
-const BR_ANG: f64 = f64::consts::FRAC_PI_4;
-const BL_ANG: f64 = -f64::consts::FRAC_PI_4;
+/// The angle at which the front right wheel moves.
+const FR_ANG: Angle = Angle {
+    fraction: -f64::consts::FRAC_PI_4 / f64::consts::TAU,
+};
+
+/// The angle at which the front left wheel moves.
+const FL_ANG: Angle = Angle {
+    fraction: f64::consts::FRAC_PI_4 / f64::consts::TAU,
+};
+
+/// The angle at which the back right wheel moves.
+const BR_ANG: Angle = Angle {
+    fraction: f64::consts::FRAC_PI_4 / f64::consts::TAU,
+};
+
+/// The angle at which the back left wheel moves.
+const BL_ANG: Angle = Angle {
+    fraction: -f64::consts::FRAC_PI_4 / f64::consts::TAU,
+};
 
 /// Represents a complete movement in translation and rotation.
 #[derive(AproxEq, Clone, Copy, Debug, Default, PartialEq)]
@@ -25,16 +40,6 @@ pub struct DriveVector {
 
     /// The speed of rotation.
     pub rotation: f64,
-}
-
-/// Represents a single frame of the drive train's state and holds data for all
-/// four motors/wheels.
-#[derive(AproxEq, Clone, Copy, Debug, Default, PartialEq)]
-pub struct DriveState {
-    fr: f64,
-    fl: f64,
-    br: f64,
-    bl: f64,
 }
 
 impl DriveVector {
@@ -72,13 +77,39 @@ impl DriveVector {
     }
 }
 
+/// Represents a single frame of the drive train's state and holds data for all
+/// four motors/wheels.
+#[derive(AproxEq, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DriveState {
+    pub fr: f64,
+    pub fl: f64,
+    pub br: f64,
+    pub bl: f64,
+}
+
 impl DriveState {
     /// Creates a `DriveState` to achieve the given `DriveVector`.
     pub fn new(vec: DriveVector) -> Self {
-        let fr_speed = f64::sin(vec.angle.radians() + FR_ANG) * vec.magnitude - vec.rotation;
-        let fl_speed = f64::sin(vec.angle.radians() + FL_ANG) * vec.magnitude + vec.rotation;
-        let br_speed = f64::sin(vec.angle.radians() + BR_ANG) * vec.magnitude - vec.rotation;
-        let bl_speed = f64::sin(vec.angle.radians() + BL_ANG) * vec.magnitude + vec.rotation;
+        let mut fr_speed = f64::sin((vec.angle + FR_ANG).radians()) * vec.magnitude - vec.rotation;
+        let mut fl_speed = f64::sin((vec.angle + FL_ANG).radians()) * vec.magnitude + vec.rotation;
+        let mut br_speed = f64::sin((vec.angle + BR_ANG).radians()) * vec.magnitude - vec.rotation;
+        let mut bl_speed = f64::sin((vec.angle + BL_ANG).radians()) * vec.magnitude + vec.rotation;
+
+        if fr_speed.abs() > 1f64 {
+            fr_speed = fr_speed.signum() * 1f64;
+        }
+
+        if fl_speed.abs() > 1f64 {
+            fl_speed = fr_speed.signum() * 1f64;
+        }
+
+        if br_speed.abs() > 1f64 {
+            br_speed = fr_speed.signum() * 1f64;
+        }
+
+        if bl_speed.abs() > 1f64 {
+            bl_speed = fr_speed.signum() * 1f64;
+        }
 
         DriveState {
             fr: fr_speed,
@@ -124,6 +155,7 @@ pub fn calc_4_axes_drive(x: f64, y: f64, rotation: f64, speed: f64) -> (DriveVec
 
 #[cfg(test)]
 mod tests {
+    use crate::{DriveState, DriveVector};
     use aprox_eq::assert_aprox_eq;
 
     #[test]
@@ -147,6 +179,45 @@ mod tests {
             assert_aprox_eq!(vec3, vec4);
 
             x += 0.1;
+        }
+    }
+
+    #[test]
+    fn never_exceeds_zero() {
+        let mut x = -1f64;
+
+        while x <= 1f64 {
+            let mut y = -1f64;
+
+            while y <= 1f64 {
+                let mut s = -1f64;
+
+                while s <= 1f64 {
+                    let mut r = -1f64;
+
+                    while r <= 1f64 {
+                        let vec = DriveVector::from_4_axes(x, y, r, s);
+                        let state = DriveState::new(vec);
+
+                        assert!(state.fr <= 1f64);
+                        assert!(state.fr >= -1f64);
+                        assert!(state.fl <= 1f64);
+                        assert!(state.fl >= -1f64);
+                        assert!(state.br <= 1f64);
+                        assert!(state.br >= -1f64);
+                        assert!(state.bl <= 1f64);
+                        assert!(state.bl >= -1f64);
+
+                        r += 0.05f64;
+                    }
+
+                    s += 0.05f64
+                }
+
+                y += 0.05f64
+            }
+
+            x += 0.05f64
         }
     }
 }
