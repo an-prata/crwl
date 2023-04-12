@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-mod angle;
+pub mod angle;
+pub mod motor;
 
 use angle::Angle;
 use aprox_derive::AproxEq;
@@ -90,32 +91,16 @@ pub struct DriveState {
 impl DriveState {
     /// Creates a `DriveState` to achieve the given `DriveVector`.
     pub fn new(vec: DriveVector) -> Self {
-        let mut fr_speed = f64::sin((vec.angle + FR_ANG).radians()) * vec.magnitude - vec.rotation;
-        let mut fl_speed = f64::sin((vec.angle + FL_ANG).radians()) * vec.magnitude + vec.rotation;
-        let mut br_speed = f64::sin((vec.angle + BR_ANG).radians()) * vec.magnitude - vec.rotation;
-        let mut bl_speed = f64::sin((vec.angle + BL_ANG).radians()) * vec.magnitude + vec.rotation;
-
-        if fr_speed.abs() > 1f64 {
-            fr_speed = fr_speed.signum() * 1f64;
-        }
-
-        if fl_speed.abs() > 1f64 {
-            fl_speed = fr_speed.signum() * 1f64;
-        }
-
-        if br_speed.abs() > 1f64 {
-            br_speed = fr_speed.signum() * 1f64;
-        }
-
-        if bl_speed.abs() > 1f64 {
-            bl_speed = fr_speed.signum() * 1f64;
-        }
+        let fr_speed = f64::sin((vec.angle + FR_ANG).radians()) * vec.magnitude - vec.rotation;
+        let fl_speed = f64::sin((vec.angle + FL_ANG).radians()) * vec.magnitude + vec.rotation;
+        let br_speed = f64::sin((vec.angle + BR_ANG).radians()) * vec.magnitude - vec.rotation;
+        let bl_speed = f64::sin((vec.angle + BL_ANG).radians()) * vec.magnitude + vec.rotation;
 
         DriveState {
-            fr: fr_speed,
-            fl: fl_speed,
-            br: br_speed,
-            bl: bl_speed,
+            fr: fr_speed.clamp(-1f64, 1f64),
+            fl: fl_speed.clamp(-1f64, 1f64),
+            br: br_speed.clamp(-1f64, 1f64),
+            bl: bl_speed.clamp(-1f64, 1f64),
         }
     }
 }
@@ -169,11 +154,6 @@ mod tests {
             assert_aprox_eq!(state3.fr, state3.fl);
             assert_aprox_eq!(state3.br, state3.bl);
             assert_aprox_eq!(state3.fr, state3.br);
-
-            assert!(state3.fr <= 1f64);
-            assert!(state3.fl <= 1f64);
-            assert!(state3.br <= 1f64);
-            assert!(state3.bl <= 1f64);
 
             assert_aprox_eq!(state3, state4);
             assert_aprox_eq!(vec3, vec4);
