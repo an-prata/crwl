@@ -3,7 +3,9 @@
 // See LICENSE file in repository root for complete license text.
 
 pub mod angle;
+pub mod gyro;
 pub mod motor;
+pub mod serial;
 
 use angle::Angle;
 use aprox_derive::AproxEq;

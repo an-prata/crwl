@@ -67,9 +67,9 @@ impl MotorController {
     /// Send this instances speed to the physical motor controller.
     pub fn send(&mut self) -> io::Result<()> {
         let r = self.speed.read().unwrap();
-        let val = *r as i8;
+        let val = *r as i16;
 
-        for i in 0..i8::BITS {
+        for i in 0..i16::BITS {
             // Get the current bit of the number.
             let bit = val >> i & 1 != 0;
 
