@@ -2,12 +2,10 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
+use crate::serial;
 use core::fmt;
-use gpio::{
-    sysfs::{SysFsGpioInput, SysFsGpioOutput},
-    GpioIn, GpioOut, GpioValue,
-};
-use std::{error::Error, io, sync::RwLock};
+use serial::Header;
+use std::error::Error;
 
 /// Spawns a thread for sending the given motor controller instance's data to
 /// the physical motor controller. Assumes the instance to be
@@ -24,64 +22,78 @@ macro_rules! spawn_motor_thread {
 
 /// A scruct for interfacing with an arduino motor controller.
 #[derive(Debug)]
-pub struct MotorController {
-    /// Pin for receiving data from the controller.
-    clock: SysFsGpioInput,
+pub struct Controller {
+    /// Address of motor on the serial bus.
+    addr: u8,
 
-    /// Pin for sending data to the controller.
-    set: SysFsGpioOutput,
-
-    /// Set speed of the controller. Read-Write lock is used to allow this feild
-    /// to be mutated without a mutable reference to self, as using GPIO pins
-    /// requires mutability.
-    speed: RwLock<f64>,
+    /// Set speed of the controller.
+    speed: f32,
 }
 
-impl MotorController {
+impl Controller {
+    /// Maximum speed the motor can be set to, finite numbers greator than this
+    /// will be clamped within range.
+    pub const MAX_SPEED: f32 = 1f32;
+
+    /// Minimum speed the motor can be set to, finite numbers less than this
+    /// will be clamped within range.
+    pub const MIN_SPEED: f32 = -Self::MAX_SPEED;
+
     /// Creates a new motor controller instance given the clock, set, and get
     /// pins associated with it.
-    pub fn new(clock_pin: u16, set_pin: u16) -> io::Result<Self> {
-        Ok(MotorController {
-            clock: SysFsGpioInput::open(clock_pin)?,
-            set: SysFsGpioOutput::open(set_pin)?,
-            speed: RwLock::new(0f64),
-        })
+    #[must_use]
+    pub fn new(addr: u8) -> Self {
+        Controller { addr, speed: 0f32 }
     }
 
-    /// Sets the desired motor speed.
-    pub fn set(&self, speed: f64) -> Result<(), InvalidSpeedError> {
-        if speed.is_nan() || !speed.is_finite() {
+    /// Sets the desired motor speed. Returns an error if `speed` is infinite or
+    /// `NaN` (as checked by `f32::is_finite()`).
+    pub fn set(&mut self, speed: f32) -> Result<(), InvalidSpeedError> {
+        if !speed.is_finite() {
             return Err(InvalidSpeedError);
         }
 
-        let mut w = self.speed.write().unwrap();
-        *w = speed.clamp(-1f64, 1f64);
+        self.speed = speed.clamp(Self::MIN_SPEED, Self::MAX_SPEED);
         Ok(())
     }
 
     /// Gets the motor controller's set speed.
-    pub fn speed(&self) -> f64 {
-        *self.speed.read().unwrap()
+    #[inline]
+    #[must_use]
+    pub fn speed(&self) -> f32 {
+        self.speed
     }
 
-    /// Send this instances speed to the physical motor controller.
-    pub fn send(&mut self) -> io::Result<()> {
-        let r = self.speed.read().unwrap();
-        let val = *r as i16;
+    /// Generates a serial packet that can be sent by a `serial::Client` to the
+    /// motor.
+    #[must_use]
+    pub fn gen_packet(&self) -> serial::Packet<McHeader> {
+        serial::Packet::<McHeader>::new(
+            McHeader::new(self.addr, McCmd::SetSpeed),
+            serial::Data::FloatingPoint(self.speed),
+        )
+    }
+}
 
-        for i in 0..i16::BITS {
-            // Get the current bit of the number.
-            let bit = val >> i & 1 != 0;
+#[derive(Header)]
+pub struct McHeader {
+    addr: u8,
+    cmd: u8,
+}
 
-            // Wait for the clock pin to go high.
-            while self.clock.read_value()? != GpioValue::High {}
-
-            // Set value of set pin to the number's bit.
-            self.set.set_value(bit)?;
+impl McHeader {
+    #[must_use]
+    fn new(addr: u8, cmd: McCmd) -> Self {
+        Self {
+            addr,
+            cmd: cmd as u8,
         }
-
-        Ok(())
     }
+}
+
+#[repr(u8)]
+pub enum McCmd {
+    SetSpeed = 1u8,
 }
 
 #[derive(Debug, Clone)]
