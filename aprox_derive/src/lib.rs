@@ -37,7 +37,7 @@ fn impl_aprox_eq(input: &DeriveInput) -> TokenStream {
                 // Rust voodoo magic. Check the aproximate equality of all
                 // fields, if one is not aproximately equal the struct isn't
                 // either.
-                true #(& &self.#field_name.aprox_eq(&other.#field_name))*
+                true #(&& self.#field_name.aprox_eq(&other.#field_name))*
             }
         }
     };
