@@ -12,6 +12,3 @@ proc-macro = true
 syn = "2.0"
 quote = "1.0"
 
-[dependencies.aprox_eq]
-path = "../aprox_eq"
-

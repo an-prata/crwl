@@ -4,10 +4,19 @@
 
 // Makes it so the `aprox_eq::*` path works within this crate for tests.
 extern crate self as aprox_eq;
+pub use aprox_derive::AproxEq;
 
 /// Trait for aproximate equality, mostly for dealing with small amounts of
 /// error that accumulate in floating point numbers which can be particularly
 /// annoying when trying to unit test.
+///
+/// ## Derivable
+///
+/// This trait can be derived, doing so implements `aprox_eq()` so that it
+/// compares all fields of the two structs, if one field is not aproximately
+/// equal then neither is the struct. This requires that all fields also
+/// implement `AproxEq`. The default implementation of `aprox_ne()` is used
+/// if `AproxEq` is derived.
 pub trait AproxEq<T = Self>
 where
     T: ?Sized,
@@ -57,6 +66,8 @@ where
     }
 }
 
+/// Behaves exactly like `assert_eq!` but calls on the `aprox_eq()` function as
+/// provided by the `AproxEq` trait instead of `eq()`.
 #[macro_export]
 macro_rules! assert_aprox_eq {
     ($left:expr, $right:expr) => {
@@ -69,6 +80,8 @@ macro_rules! assert_aprox_eq {
     };
 }
 
+/// Behaves exactly like `assert_ne!` but calls on the `aprox_ne()` function as
+/// provided by the `AproxEq` trait instead of `ne()`.
 #[macro_export]
 macro_rules! assert_aprox_ne {
     ($left:expr, $right:expr) => {
@@ -97,6 +110,21 @@ impl AproxEq for f32 {
 
 #[cfg(test)]
 mod tests {
+    use crate::AproxEq;
+    use aprox_derive::AproxEq;
+
+    #[derive(AproxEq, Debug)]
+    struct SomeFoats {
+        pub a: f64,
+        pub b: f32,
+    }
+
+    #[derive(AproxEq, Debug)]
+    struct SomeAproxEq {
+        pub a: SomeFoats,
+        pub b: SomeFoats,
+    }
+
     #[test]
     fn basic_aprox_eq() {
         assert_aprox_eq!(1.0002_f64, 1.000199999_f64);
@@ -113,5 +141,24 @@ mod tests {
         let c = a + b;
 
         assert_aprox_ne!(a, c);
+    }
+
+    #[test]
+    fn derive_test() {
+        assert_aprox_eq!(
+            SomeFoats { a: 3f64, b: 2f32 },
+            SomeFoats { a: 3f64, b: 2f32 }
+        );
+
+        assert_aprox_eq!(
+            SomeAproxEq {
+                a: SomeFoats { a: 3f64, b: 2f32 },
+                b: SomeFoats { a: 5f64, b: 4f32 }
+            },
+            SomeAproxEq {
+                a: SomeFoats { a: 3f64, b: 2f32 },
+                b: SomeFoats { a: 5f64, b: 4f32 }
+            }
+        );
     }
 }
