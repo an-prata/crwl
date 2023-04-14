@@ -15,3 +15,7 @@ version = "0.1"
 [dependencies.aprox_derive]
 path = "../aprox_derive"
 version = "0.1"
+
+[dependencies.header_derive]
+path = "../header_derive"
+version = "0.1"

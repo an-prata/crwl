@@ -3,6 +3,7 @@
 // See LICENSE file in repository root for complete license text.
 
 use gpio::{sysfs::SysFsGpioOutput, GpioOut};
+pub use header_derive::Header;
 use std::{
     io, mem,
     sync::{
@@ -12,17 +13,18 @@ use std::{
     thread,
 };
 
-/// Responisble to sending out commands to devices on a serial bus.
-pub struct Controller {
+/// Responisble for sending out commands to devices on a serial bus.
+pub struct Client {
     sender: Arc<RwLock<BitSender>>,
     is_sent: Arc<RwLock<AtomicBool>>,
     packets: Arc<RwLock<Vec<(u64, u8)>>>,
     queue: Vec<(u64, u8)>,
 }
 
-impl Controller {
-    /// Creates a new serial controller given the clock and data pins to use as
-    /// a serial bus.
+impl Client {
+    /// Creates a new serial client given the clock and data pins to use as a
+    /// serial bus.
+    #[must_use]
     pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
         let mut sender = BitSender::new(clock_pin, data_pin)?;
         sender.start()?;
@@ -37,7 +39,7 @@ impl Controller {
 
     /// Queues a packet for sending, no packets will be sent until the queue is
     /// buffered.
-    pub fn queue_packet<T: Tag>(&mut self, packet: Packet<T>) {
+    pub fn queue_packet<T: Header>(&mut self, packet: Packet<T>) {
         self.queue.push(packet.to_bits());
     }
 
@@ -63,7 +65,7 @@ impl Controller {
         self.queue.clear();
     }
 
-    /// Starts the serial controller, this begins a new thread that will
+    /// Starts the serial client, this begins a new thread that will
     /// continually check for and send newly buffered packets.
     pub fn start(&self) -> thread::JoinHandle<io::Result<()>> {
         let sender = self.sender.clone();
@@ -108,6 +110,7 @@ struct BitSender {
 }
 
 impl BitSender {
+    #[must_use]
     pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
         Ok(Self {
             clock: SysFsGpioOutput::open(clock_pin)?,
@@ -161,13 +164,21 @@ pub enum Data {
 }
 
 impl Data {
+    /// Size of any value from a `Data` enum in bytes, does not reflect actual
+    /// memory required for storing the enum, only its value, which is always 32
+    /// bit.
     pub const SIZE: usize = mem::size_of::<u32>();
+
+    /// Size of any value from a `Data` enum in bits, does not reflect actual
+    /// memory required for storing the enum, only its value, which is always 32
+    /// bit.
     pub const BITS: u32 = u32::BITS;
 }
 
 impl ToBinary for Data {
     /// `to_bits()` will always be a number of bits equal to `Data::BITS` and
-    /// can be cast to a `u32` withou the loss of data.
+    /// can be cast to a `u32` without the loss of data.
+    #[must_use]
     fn to_bits(&self) -> (u64, u8) {
         match self {
             Self::FloatingPoint(n) => (n.to_bits() as u64, Self::BITS as u8),
@@ -177,10 +188,46 @@ impl ToBinary for Data {
     }
 }
 
+/// Represents a single addressed packet for the serial bus where T is the type
+/// of tag being used, this must implement the `Header` trait.
+pub struct Packet<T: Header> {
+    head: T,
+    data: Data,
+}
+
+impl<T: Header> Packet<T> {
+    /// Number of bits in each packet as sent over serial, does not reflect
+    /// actual size in computer memory which is made different by alignment and
+    /// tag information stored in enums.
+    pub const BITS: u32 = (mem::size_of::<u8>() * 2 * 8) as u32 + Data::BITS;
+
+    /// Creates a new packet, for a device at the given address, in which all
+    /// type and handling information is contained in `tag`, and all data can be
+    /// found in the `data` parameter.
+    #[must_use]
+    pub fn new(tag: T, data: Data) -> Self {
+        Self { head: tag, data }
+    }
+}
+
+impl<T: Header> ToBinary for Packet<T> {
+    /// Every return value of `to_bits()` for `Packet` will have a second value
+    /// equal to `Packet::<T>::BITS`.
+    fn to_bits(&self) -> (u64, u8) {
+        let (data, data_bits) = self.data.to_bits();
+        let head = self.head.to_bits().0 << data_bits;
+
+        (0u64 | head | data, Self::BITS as u8)
+    }
+}
+
 /// Trait for representing a packet tag, used for distinguishing different
 /// commands, data types, etc. and used for addressing data to a specific
 /// device.
-pub trait Tag {
+pub trait Header {
+    /// The number of bits taken up by any header's address and command.
+    const BITS: u32 = u8::BITS * 2;
+
     /// Gets the address of the tag, this will be checked by all devices on the
     /// bus and be used to determine which device should utilise the rest of the
     /// packet.
@@ -193,37 +240,18 @@ pub trait Tag {
     fn cmd(&self) -> u8;
 }
 
-/// Represents a single addressed packet for the serial bus.
-pub struct Packet<T: Tag> {
-    tag: T,
-    data: Data,
-}
+impl<T: Header> ToBinary for T {
+    fn to_bits(&self) -> (u64, u8) {
+        let addr: u64 = (self.addr() as u64) << u8::BITS;
+        let cmd: u64 = self.cmd() as u64;
 
-impl<T: Tag> Packet<T> {
-    const ADDR_SHIFT: u64 = (mem::size_of::<u8>() * 8) as u64 + Data::BITS as u64;
-    const TAG_SHIFT: u64 = (mem::size_of::<u32>() * 8) as u64;
-
-    /// Number of bits in each packet as sent over serial, does not reflect
-    /// actual size in computer memory which is made different by alignment and
-    /// tag information stored in enums.
-    pub const BITS: u32 = (mem::size_of::<u8>() * 2 * 8) as u32 + Data::BITS;
-
-    /// Creates a new packet, for a device at the given address, in which all
-    /// type and handling information is contained in `tag`, and all data can be
-    /// found in the `data` parameter.
-    pub fn new(tag: T, data: Data) -> Self {
-        Self { tag, data }
+        (0u64 | addr | cmd, Self::BITS as u8)
     }
 }
 
-impl<T: Tag> ToBinary for Packet<T> {
-    /// Every return value of `to_bits()` for `Packet` will have a second value
-    /// equal to `Packet::BITS`.
+impl ToBinary for (u64, u8) {
     fn to_bits(&self) -> (u64, u8) {
-        let addr: u64 = (self.tag.addr() as u64) << Self::ADDR_SHIFT;
-        let tag: u64 = (self.tag.cmd() as u64) << Self::TAG_SHIFT;
-        let data = self.data.to_bits().0 as u64;
-        (0u64 | addr | tag | data, Self::BITS as u8)
+        *self
     }
 }
 
@@ -242,11 +270,6 @@ pub trait ToBinary {
     /// to represent the object is equal to the value of the second item. Any
     /// return value in which the second item is greator than the number of bits
     /// in the first is necessarily invalid.
+    #[must_use]
     fn to_bits(&self) -> (u64, u8);
-}
-
-impl ToBinary for (u64, u8) {
-    fn to_bits(&self) -> (u64, u8) {
-        *self
-    }
 }
