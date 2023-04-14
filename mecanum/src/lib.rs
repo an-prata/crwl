@@ -8,7 +8,6 @@ pub mod motor;
 pub mod serial;
 
 use angle::Angle;
-use aprox_derive::AproxEq;
 use aprox_eq::AproxEq;
 use std::f64;
 

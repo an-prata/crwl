@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use aprox_derive::AproxEq;
 use aprox_eq::AproxEq;
 use std::{
     f64,
