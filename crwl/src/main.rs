@@ -2,22 +2,19 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use std::{
-    sync::{Arc, RwLock},
-    thread,
-};
-
+mod log;
 use gilrs::{Axis, Gilrs};
-use mecanum::{motor::MotorController, spawn_motor_thread, DriveState, DriveVector};
+use mecanum::{motor, serial};
 
-const FR_CLOCK_PIN: u16 = 0;
-const FR_SET_PIN: u16 = 0;
-const FL_CLOCK_PIN: u16 = 0;
-const FL_SET_PIN: u16 = 0;
-const BR_CLOCK_PIN: u16 = 0;
-const BR_SET_PIN: u16 = 0;
-const BL_CLOCK_PIN: u16 = 0;
-const BL_SET_PIN: u16 = 0;
+const CLIENT_CLOCK_PIN: u16 = 0u16;
+const CLIENT_DATA_PIN: u16 = 1u16;
+const SERVER_CLOCK_PIN: u16 = 2u16;
+const SERVER_DATA_PIN: u16 = 3u16;
+
+const FR_MOTOR_ADDR: u8 = 0u8;
+const FL_MOTOR_ADDR: u8 = 1u8;
+const BR_MOTOR_ADDR: u8 = 2u8;
+const BL_MOTOR_ADDR: u8 = 3u8;
 
 /// Unwraps a gilrs `Option<&AxisData>` to an `f32` or default.
 macro_rules! unwrap_axis {
@@ -27,37 +24,18 @@ macro_rules! unwrap_axis {
 }
 
 fn main() {
+    let mut logger = log::Logger::new("~/crwl.log").unwrap();
+
     let mut gilrs = Gilrs::new().unwrap();
     let mut active_gamepad_id = None;
 
-    // Front right motor controller.
-    let fr = Arc::new(RwLock::new(
-        MotorController::new(FR_CLOCK_PIN, FR_SET_PIN).unwrap(),
-    ));
+    let serial_client = serial::Client::new(CLIENT_CLOCK_PIN, CLIENT_DATA_PIN);
+    let serial_server = serial::Server::new(SERVER_CLOCK_PIN, SERVER_DATA_PIN);
 
-    // Front left motor controller.
-    let fl = Arc::new(RwLock::new(
-        MotorController::new(FL_CLOCK_PIN, FR_SET_PIN).unwrap(),
-    ));
-
-    // Back right motor controller.
-    let br = Arc::new(RwLock::new(
-        MotorController::new(BR_CLOCK_PIN, BR_SET_PIN).unwrap(),
-    ));
-
-    // Back left motor contreller.
-    let bl = Arc::new(RwLock::new(
-        MotorController::new(BL_CLOCK_PIN, BL_SET_PIN).unwrap(),
-    ));
-
-    // let mut drive_vector: DriveVector;
-    let mut drive_state: DriveState;
-
-    // Start threads for all motors.
-    spawn_motor_thread!(fr);
-    spawn_motor_thread!(fl);
-    spawn_motor_thread!(br);
-    spawn_motor_thread!(bl);
+    let mut fr = motor::Controller::new(FR_MOTOR_ADDR);
+    let mut fl = motor::Controller::new(FL_MOTOR_ADDR);
+    let mut br = motor::Controller::new(BR_MOTOR_ADDR);
+    let mut bl = motor::Controller::new(BL_MOTOR_ADDR);
 
     // Main crwl loop.
     loop {
@@ -72,7 +50,7 @@ fn main() {
             // mode, consider creating a constructor that utilises angle instead
             // of axes.
 
-            (_, drive_state) = mecanum::calc_4_axes_drive(
+            let (_, drive_state) = mecanum::calc_4_axes_drive(
                 unwrap_axis!(active_gamepad.axis_data(Axis::LeftStickX)) as f64,
                 unwrap_axis!(active_gamepad.axis_data(Axis::LeftStickY)) as f64,
                 unwrap_axis!(active_gamepad.axis_data(Axis::RightStickX)) as f64,
@@ -80,10 +58,10 @@ fn main() {
                     - unwrap_axis!(active_gamepad.axis_data(Axis::LeftZ)) as f64,
             );
 
-            fr.read().unwrap().set(drive_state.fr).unwrap();
-            fl.read().unwrap().set(drive_state.fl).unwrap();
-            br.read().unwrap().set(drive_state.br).unwrap();
-            bl.read().unwrap().set(drive_state.bl).unwrap();
+            ok_or_log!(logger, fr.set(drive_state.fr as f32));
+            ok_or_log!(logger, fl.set(drive_state.fl as f32));
+            ok_or_log!(logger, br.set(drive_state.br as f32));
+            ok_or_log!(logger, bl.set(drive_state.bl as f32));
 
             // TODO: Set motors based on drive state.
         }
