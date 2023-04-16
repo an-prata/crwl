@@ -10,13 +10,13 @@ gilrs = "0.10.1"
 tokio = { version = "1", features = ["full"] }
 
 [dependencies.mecanum]
-path = "../mecanum"
+path = "./mecanum"
 version = "0.1.0"
 
 [dependencies.aprox_eq]
-path = "../aprox_eq"
+path = "./aprox_eq"
 version = "0.1.0"
 
 [dependencies.aprox_derive]
-path = "../aprox_derive"
+path = "./aprox_derive"
 version = "0.1.0"
