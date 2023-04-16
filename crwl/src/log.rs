@@ -45,18 +45,18 @@ impl Logger {
     }
 
     /// Does nothing if the given result is `Ok`, if the result is an `Err` then
-    /// it is converted to a string and logged as a `Line::Err`. Returns `None`
-    /// if the given result was `Ok` and returns the `Error` if it was present.
+    /// it is converted to a string and logged as a `Line::Err`. Returns the `Ok`
+    /// value of the result if the result was `Ok`, otherwise `None` is returned.
     #[inline]
-    pub fn log_if_err<T, E>(&mut self, result: Result<T, E>) -> Option<E>
+    pub fn log_if_err<T, E>(&mut self, result: Result<T, E>) -> Option<T>
     where
         E: error::Error,
     {
         match result {
-            Ok(_) => None,
+            Ok(v) => Some(v),
             Err(e) => {
                 self.log(Line::from_err(&e)).unwrap();
-                Some(e)
+                None
             }
         }
     }
