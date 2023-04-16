@@ -3,21 +3,9 @@
 // See LICENSE file in repository root for complete license text.
 
 use std::{
-    fs,
+    error, fs,
     io::{self, Write},
 };
-
-#[macro_export]
-macro_rules! ok_or_log {
-    ($log:expr, $result:expr) => {
-        match $result {
-            Ok(_) => {}
-            Err(err) => {
-                $log.log(log::Line::Err(err.to_string())).ok();
-            }
-        }
-    };
-}
 
 /// For logging messages of varying severity.
 pub struct Logger {
@@ -56,6 +44,23 @@ impl Logger {
         Ok(())
     }
 
+    /// Does nothing if the given result is `Ok`, if the result is an `Err` then
+    /// it is converted to a string and logged as a `Line::Err`. Returns `None`
+    /// if the given result was `Ok` and returns the `Error` if it was present.
+    #[inline]
+    pub fn log_if_err<T, E>(&mut self, result: Result<T, E>) -> Option<E>
+    where
+        E: error::Error,
+    {
+        match result {
+            Ok(_) => None,
+            Err(e) => {
+                self.log(Line::from_err(&e)).unwrap();
+                Some(e)
+            }
+        }
+    }
+
     /// Set the type of log messages to display to the console through either
     /// standard error or standard out. All messages in lesser severity to the
     /// one given will also be displayed, meaning that given `Line::Warn` all
@@ -87,6 +92,13 @@ impl Line {
     #[must_use]
     pub fn severity(&self) -> u8 {
         unsafe { *(self as *const Self as *const u8) }
+    }
+
+    /// Creates a new `Line` of variant `Err` given an `Error`.
+    #[inline]
+    #[must_use]
+    pub fn from_err<T: error::Error>(err: &T) -> Self {
+        Self::Err(err.to_string())
     }
 }
 
