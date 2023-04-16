@@ -9,7 +9,7 @@ use gpio::{
 pub use header_derive::Header;
 use std::{
     io, mem,
-    sync::mpsc::{channel, SendError, Sender},
+    sync::mpsc::{self, SendError, Sender},
     thread,
 };
 
@@ -23,7 +23,7 @@ impl Client {
     /// serial bus.
     #[must_use]
     pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
-        let (tx, rx) = channel();
+        let (tx, rx) = mpsc::channel();
         let mut sender = BitSender::new(clock_pin, data_pin)?;
 
         thread::spawn(move || -> io::Result<()> {
@@ -45,16 +45,17 @@ impl Client {
         Ok(Self { tx })
     }
 
-    /// Queues a packet for sending on the client thread. An `Err` value from
-    /// this function means that the `Client` instance's thread has returned
-    /// with an error, which would suggest that an `io::Error` has occured
-    /// internally.
-    pub fn send<T>(&mut self, packet: Packet<T>) -> Result<(), SendError<BinaryData>>
+    /// Queues a packet for sending on the client thread. Returns the given
+    /// packet's head on success. An `Err` value from this function means that
+    /// the `Client` instance's thread has returned with an error, which would
+    /// suggest that an `io::Error` has occured internally.
+    #[inline]
+    pub fn send<T>(&mut self, packet: Packet<T>) -> Result<T, SendError<BinaryData>>
     where
         T: Header,
     {
         self.tx.send(packet.to_binary())?;
-        Ok(())
+        Ok(packet.head)
     }
 }
 
@@ -83,7 +84,7 @@ impl Server {
     /// * `head` - Packet head to listen for.
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
-    pub fn listen_for<T: Header>(&mut self, head: &T, data_type: Data) -> io::Result<Data> {
+    pub async fn listen_for<T: Header>(&mut self, head: T, data_type: Data) -> io::Result<Data> {
         let recieved_packet = self.reciever.recieve()?;
 
         // Since all recived data is made by request we should be recieving
@@ -105,14 +106,25 @@ impl Server {
     ///
     /// * `heads` - A slice of `Header`s in the order the are expect to come.
     /// * `data_type` - Enum variant of `Data` to return.
-    pub fn listen_for_sequence<T>(&mut self, heads: &[T], data_type: Data) -> io::Result<Vec<Data>>
+    pub async fn listen_for_seq<T>(&mut self, heads: &[T], data_type: Data) -> io::Result<Vec<Data>>
     where
         T: Header,
     {
         let mut data = vec![Data::UnsignedInteger(0); heads.len()];
 
         for h in heads {
-            data.push(self.listen_for(h, data_type)?);
+            let packet = self.reciever.recieve()?;
+
+            // Since all recived data is made by request we should be recieving
+            // exactly the listened for header, anything else is an error.
+            if packet.head.addr() != h.addr() || packet.head.cmd() != h.cmd() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "recieved header did not match one provided",
+                ));
+            }
+
+            data.push(packet.data.to_type(&data_type));
         }
 
         Ok(data)
@@ -340,9 +352,8 @@ impl FromBinary for Data {
 /// Represents a single addressed packet for the serial bus where T is the type
 /// of tag being used, this must implement the `Header` trait.
 pub struct Packet<T: Header> {
-    // TODO: access to fields.
-    head: T,
-    data: Data,
+    pub head: T,
+    pub data: Data,
 }
 
 impl<T: Header> Packet<T> {
