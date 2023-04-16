@@ -3,22 +3,24 @@
 // See LICENSE file in repository root for complete license text.
 
 mod log;
+use gilrs::{Axis, Button, EventType, Gilrs};
+use mecanum::{angle::Angle, gyro, headless::DriveMode, motor, serial, DriveState, DriveVector};
 use std::error::Error;
-
-use gilrs::{Axis, Gilrs};
-use mecanum::{motor, serial};
 
 const CLIENT_CLOCK_PIN: u16 = 0u16;
 const CLIENT_DATA_PIN: u16 = 1u16;
 const SERVER_CLOCK_PIN: u16 = 2u16;
 const SERVER_DATA_PIN: u16 = 3u16;
 
+const GYRO_ADDR: u8 = 4u8;
+
 const FR_MOTOR_ADDR: u8 = 0u8;
 const FL_MOTOR_ADDR: u8 = 1u8;
 const BR_MOTOR_ADDR: u8 = 2u8;
 const BL_MOTOR_ADDR: u8 = 3u8;
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let mut logger = log::Logger::new("~/crwl.log")?;
 
     let mut gilrs = Gilrs::new()?;
@@ -26,6 +28,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut serial_client = serial::Client::new(CLIENT_CLOCK_PIN, CLIENT_DATA_PIN)?;
     let mut serial_server = serial::Server::new(SERVER_CLOCK_PIN, SERVER_DATA_PIN)?;
+
+    let mut gyro = gyro::Controller::new(GYRO_ADDR);
+
+    let mut drive_mode = DriveMode::Relative;
 
     let mut fr = motor::Controller::new(FR_MOTOR_ADDR);
     let mut fl = motor::Controller::new(FL_MOTOR_ADDR);
@@ -36,7 +42,34 @@ fn main() -> Result<(), Box<dyn Error>> {
     loop {
         while let Some(event) = gilrs.next_event() {
             gamepad_id = Some(event.id);
+
+            let gamepad = gilrs.gamepad(event.id);
+
+            if event.event
+                == EventType::ButtonReleased(
+                    Button::Start,
+                    gamepad.button_code(Button::Start).unwrap(),
+                )
+            {
+                // Zero the gyro on start button release.
+                gyro.zero();
+            } else if event.event
+                == EventType::ButtonPressed(
+                    Button::LeftThumb,
+                    gamepad.button_code(Button::LeftThumb).unwrap(),
+                )
+            {
+                // Toggle drive mode on left stick.
+                match drive_mode {
+                    DriveMode::Relative => drive_mode = DriveMode::Headless,
+                    DriveMode::Headless => drive_mode = DriveMode::Relative,
+                }
+            }
         }
+
+        // Start updating recorded value while we do not need the serial client
+        // and server.
+        let gyro_future = gyro.update(&mut serial_client, &mut serial_server);
 
         if let Some(id) = gamepad_id {
             let gamepad = gilrs.gamepad(id);
@@ -95,12 +128,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             };
 
-            let (_, drive_state) = mecanum::calc_4_axes_drive(
-                left_x as f64,
-                left_y as f64,
-                right_x as f64,
-                right_z as f64 - left_z as f64,
-            );
+            gyro_future.await?;
+
+            let drive_vec = DriveVector {
+                angle: Angle::from_radians(f64::atan2(left_y as f64, left_x as f64)),
+                magnitude: right_z as f64 - left_z as f64,
+                rotation: right_x as f64,
+            };
+
+            let drive_state = DriveState::new(drive_vec);
 
             logger.log_if_err(fr.set(drive_state.fr as f32));
             logger.log_if_err(fl.set(drive_state.fl as f32));
