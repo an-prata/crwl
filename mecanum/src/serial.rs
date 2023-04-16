@@ -9,19 +9,13 @@ use gpio::{
 pub use header_derive::Header;
 use std::{
     io, mem,
-    sync::{
-        atomic::{self, AtomicBool},
-        Arc, RwLock,
-    },
+    sync::mpsc::{channel, SendError, Sender},
     thread,
 };
 
 /// Responisble for sending out commands to devices on a serial bus.
 pub struct Client {
-    sender: Arc<RwLock<BitSender>>,
-    is_sent: Arc<RwLock<AtomicBool>>,
-    packets: Arc<RwLock<Vec<(u64, u8)>>>,
-    queue: Vec<(u64, u8)>,
+    tx: Sender<BinaryData>,
 }
 
 impl Client {
@@ -29,81 +23,51 @@ impl Client {
     /// serial bus.
     #[must_use]
     pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
+        let (tx, rx) = channel();
         let mut sender = BitSender::new(clock_pin, data_pin)?;
-        sender.start()?;
 
-        Ok(Self {
-            sender: Arc::new(RwLock::new(sender)),
-            is_sent: Arc::new(RwLock::new(AtomicBool::new(false))),
-            packets: Arc::new(RwLock::new(Vec::new())),
-            queue: Vec::new(),
-        })
-    }
-
-    /// Queues a packet for sending, no packets will be sent until the queue is
-    /// buffered.
-    pub fn queue_packet<T: Header>(&mut self, packet: Packet<T>) {
-        self.queue.push(packet.to_binary());
-    }
-
-    /// Buffers the queue so that it will be sent, this will block the current
-    /// thread if the previous buffer has not been completely sent.
-    pub fn buffer_queue(&mut self) {
-        let mut vec = self.packets.write().unwrap();
-
-        // Wait for remaining packets to be sent before swapping the packets to
-        // be sent and the queue. This thread block is fine, if not actually
-        // bennificial as we dont want our main thread to fall out of syn with
-        // the serial sending thread, which would cause a growing latency in any
-        // inputs.
-        while !self.is_sent.read().unwrap().load(atomic::Ordering::Relaxed) {}
-        mem::swap(&mut self.queue, &mut vec);
-
-        // Mark that the new buffer has not been, and should be, sent.
-        self.is_sent
-            .write()
-            .unwrap()
-            .store(false, atomic::Ordering::Relaxed);
-
-        self.queue.clear();
-    }
-
-    /// Starts the serial client, this begins a new thread that will
-    /// continually check for and send newly buffered packets.
-    pub fn start(&self) -> thread::JoinHandle<io::Result<()>> {
-        let sender = self.sender.clone();
-        let is_sent = self.is_sent.clone();
-        let vec = self.packets.clone();
-
-        thread::spawn(move || {
-            let mut sender = sender.write().unwrap();
-            let vec = vec.write().unwrap();
-            let is_sent = is_sent.write().unwrap();
-
+        thread::spawn(move || -> io::Result<()> {
             loop {
-                // Wait until we get some new packets.
-                if !is_sent.load(atomic::Ordering::Relaxed) {
-                    continue;
-                }
+                let packet: BinaryData = match rx.recv() {
+                    Ok(p) => p,
 
-                let iter = vec.iter();
+                    // Returning here makes it so that when the transmitter, and
+                    // therefore its containing struct is dropped, so too does
+                    // this thread return, which in this case is not actually an
+                    // error.
+                    Err(_) => return Ok(()),
+                };
 
-                for packet in iter {
-                    sender.send(*packet)?;
-                }
-
-                // Signal that we have finished sending this queue.
-                is_sent.store(true, atomic::Ordering::Relaxed);
+                sender.send(packet)?;
             }
-        })
+        });
+
+        Ok(Self { tx })
+    }
+
+    /// Queues a packet for sending on the client thread. An `Err` value from
+    /// this function means that the `Client` instance's thread has returned
+    /// with an error, which would suggest that an `io::Error` has occured
+    /// internally.
+    pub fn send<T>(&mut self, packet: Packet<T>) -> Result<(), SendError<BinaryData>>
+    where
+        T: Header,
+    {
+        self.tx.send(packet.to_binary())?;
+        Ok(())
     }
 }
 
+/// Responsible for recieving messages from the serial bus.
 pub struct Server {
     reciever: BitReciever,
 }
 
 impl Server {
+    /// Instantiants a new `Server` given the clock and data pins of the serial
+    /// bus to read from.
+    #[inline]
+    #[must_use]
     pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
         Ok(Self {
             reciever: BitReciever::new(clock_pin, data_pin)?,
@@ -117,8 +81,9 @@ impl Server {
     /// # Arguments
     ///
     /// * `head` - Packet head to listen for.
-    /// * `data_type` - Enum type of `Data` to return.
-    pub fn listen_for<T: Header>(&mut self, head: T, data_type: Data) -> io::Result<Data> {
+    /// * `data_type` - Enum variant of `Data` to return.
+    #[must_use]
+    pub fn listen_for<T: Header>(&mut self, head: &T, data_type: Data) -> io::Result<Data> {
         let recieved_packet = self.reciever.recieve()?;
 
         // Since all recived data is made by request we should be recieving
@@ -131,6 +96,26 @@ impl Server {
         }
 
         Ok(recieved_packet.data.to_type(&data_type))
+    }
+
+    /// Listens for packets with all given heads in order, returns an error if
+    /// any packet comes with the wrong header or in the wrong order.
+    ///
+    /// # Arguments
+    ///
+    /// * `heads` - A slice of `Header`s in the order the are expect to come.
+    /// * `data_type` - Enum variant of `Data` to return.
+    pub fn listen_for_sequence<T>(&mut self, heads: &[T], data_type: Data) -> io::Result<Vec<Data>>
+    where
+        T: Header,
+    {
+        let mut data = vec![Data::UnsignedInteger(0); heads.len()];
+
+        for h in heads {
+            data.push(self.listen_for(h, data_type)?);
+        }
+
+        Ok(data)
     }
 }
 
@@ -304,10 +289,37 @@ impl Data {
     }
 }
 
+impl Into<f32> for Data {
+    fn into(self) -> f32 {
+        match self {
+            Self::FloatingPoint(n) => n,
+            _ => panic!("not a floating point number"),
+        }
+    }
+}
+
+impl Into<i32> for Data {
+    fn into(self) -> i32 {
+        match self {
+            Self::SignedInteger(n) => n,
+            _ => panic!("not a signed integer"),
+        }
+    }
+}
+
+impl Into<u32> for Data {
+    fn into(self) -> u32 {
+        match self {
+            Self::UnsignedInteger(n) => n,
+            _ => panic!("not an unsigned integer"),
+        }
+    }
+}
+
 impl ToBinary for Data {
     /// `to_binary()` will always be a number of bits equal to `Data::BITS` and
     /// can be cast to a `u32` without the loss of data.
-    fn to_binary(&self) -> (u64, u8) {
+    fn to_binary(&self) -> BinaryData {
         match self {
             Self::FloatingPoint(n) => (n.to_bits() as u64, Self::BITS as u8),
             Self::SignedInteger(n) => (*n as u64, Self::BITS as u8),
@@ -328,6 +340,7 @@ impl FromBinary for Data {
 /// Represents a single addressed packet for the serial bus where T is the type
 /// of tag being used, this must implement the `Header` trait.
 pub struct Packet<T: Header> {
+    // TODO: access to fields.
     head: T,
     data: Data,
 }
@@ -359,7 +372,7 @@ impl FromBinary for Packet<GenericHeader> {
 impl<T: Header> ToBinary for Packet<T> {
     /// Every return value of `to_bits()` for `Packet` will have a second value
     /// equal to `Packet::<T>::BITS`.
-    fn to_binary(&self) -> (u64, u8) {
+    fn to_binary(&self) -> BinaryData {
         let (data, data_bits) = self.data.to_binary();
         let head = self.head.to_binary().0 << data_bits;
 
@@ -418,7 +431,7 @@ pub trait Header {
 }
 
 impl<T: Header> ToBinary for T {
-    fn to_binary(&self) -> (u64, u8) {
+    fn to_binary(&self) -> BinaryData {
         let addr: u64 = (self.addr() as u64) << u8::BITS;
         let cmd: u64 = self.cmd() as u64;
 
@@ -426,11 +439,14 @@ impl<T: Header> ToBinary for T {
     }
 }
 
-impl ToBinary for (u64, u8) {
-    fn to_binary(&self) -> (u64, u8) {
+impl ToBinary for BinaryData {
+    fn to_binary(&self) -> BinaryData {
         *self
     }
 }
+
+/// Represents a binary representation of data.
+type BinaryData = (u64, u8);
 
 /// Represents an object that can be converted to a binary representation.
 pub trait ToBinary {
@@ -448,7 +464,7 @@ pub trait ToBinary {
     /// return value in which the second item is greator than the number of bits
     /// in the first is necessarily invalid.
     #[must_use]
-    fn to_binary(&self) -> (u64, u8);
+    fn to_binary(&self) -> BinaryData;
 }
 
 /// Represents an object that can be constructed from its binary representation.
