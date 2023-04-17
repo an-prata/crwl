@@ -53,6 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             {
                 // Zero the gyro on start button release.
                 gyro.zero();
+                logger.log(log::Line::Info(String::from("Zeroed gyro angles")))?;
             } else if event.event
                 == EventType::ButtonPressed(
                     Button::LeftThumb,
@@ -64,6 +65,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     DriveMode::Relative => drive_mode = DriveMode::Headless,
                     DriveMode::Headless => drive_mode = DriveMode::Relative,
                 }
+
+                logger.log(log::Line::Info(format!(
+                    "Set drive mode to {:?}",
+                    drive_mode
+                )))?;
             }
         }
 

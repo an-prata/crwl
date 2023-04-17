@@ -4,6 +4,8 @@
 
 use crate::{angle::Angle, DriveState, DriveVector};
 
+/// Represents a drive mode, namely the drive's frame of reference for controls.
+#[derive(Debug)]
 pub enum DriveMode {
     Headless,
     Relative,
