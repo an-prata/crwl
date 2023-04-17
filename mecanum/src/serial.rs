@@ -145,6 +145,9 @@ struct BitSender {
 }
 
 impl BitSender {
+    /// Creates a new `BitSender` for sending data using the given clock and
+    /// data pins.
+    #[inline]
     #[must_use]
     pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
         Ok(Self {
@@ -196,6 +199,8 @@ struct BitReciever {
 
 impl BitReciever {
     /// Produces a new `BitReciever` given the clock and data pins to read from.
+    #[inline]
+    #[must_use]
     pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
         Ok(Self {
             clock: SysFsGpioInput::open(clock_pin)?,
