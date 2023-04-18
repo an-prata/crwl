@@ -23,8 +23,9 @@ impl Client {
     /// serial bus.
     #[must_use]
     pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
-        let (tx, rx) = mpsc::channel();
+        // Kept outside the thread so we can return the error before spawning.
         let mut sender = BitSender::new(clock_pin, data_pin)?;
+        let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || -> io::Result<()> {
             loop {
@@ -85,7 +86,7 @@ impl Server {
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
     pub async fn listen_for<T: Header>(&mut self, head: T, data_type: Data) -> io::Result<Data> {
-        let recieved_packet = self.reciever.recieve()?;
+        let recieved_packet = self.reciever.recv()?;
 
         // Since all recived data is made by request we should be recieving
         // exactly the listened for header, anything else is an error.
@@ -113,7 +114,7 @@ impl Server {
         let mut data = vec![Data::UnsignedInteger(0); heads.len()];
 
         for h in heads {
-            let packet = self.reciever.recieve()?;
+            let packet = self.reciever.recv()?;
 
             // Since all recived data is made by request we should be recieving
             // exactly the listened for header, anything else is an error.
@@ -214,7 +215,7 @@ impl BitReciever {
     /// and must have their data and headers cast to fully recover the packet's
     /// information, furthermore all addresses are of the sending device as even
     /// when recieving this remains the controller device and has no address.
-    pub fn recieve(&mut self) -> io::Result<Packet<GenericHeader>> {
+    pub fn recv(&mut self) -> io::Result<Packet<GenericHeader>> {
         // Wait until we see a change from clock high data low.
         while self.clock.read_value()? == GpioValue::High
             && self.data.read_value()? == GpioValue::Low
