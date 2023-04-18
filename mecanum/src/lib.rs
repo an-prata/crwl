@@ -5,6 +5,7 @@
 pub mod angle;
 pub mod gyro;
 pub mod headless;
+pub mod led_lights;
 pub mod motor;
 pub mod serial;
 
