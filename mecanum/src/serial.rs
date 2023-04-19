@@ -663,6 +663,9 @@ mod tests {
     }
 
     impl<'a> BitReciever<DummyGpioIn<&'a dyn Fn() -> GpioValue>> {
+        /// Creates a new dummy `BitReciever` for unit testing.
+        #[inline]
+        #[must_use]
         fn new(clock: &'a dyn Fn() -> GpioValue, data: &'a dyn Fn() -> GpioValue) -> Self {
             Self {
                 clock: DummyGpioIn::new(clock),
