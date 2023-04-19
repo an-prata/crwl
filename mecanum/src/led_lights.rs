@@ -181,7 +181,7 @@ impl Color {
 }
 
 /// Header for LED light serial packets.
-#[derive(Header)]
+#[derive(Header, Clone, Copy)]
 pub struct LedHeader {
     pub addr: u8,
     pub cmd: u8,

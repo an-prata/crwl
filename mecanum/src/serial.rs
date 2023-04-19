@@ -11,6 +11,7 @@ use std::{
     io, mem,
     sync::mpsc::{self, SendError, Sender},
     thread,
+    time::Duration,
 };
 
 /// Responisble for sending out commands to devices on a serial bus.
@@ -22,9 +23,9 @@ impl Client {
     /// Creates a new serial client given the clock and data pins to use as a
     /// serial bus.
     #[must_use]
-    pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
+    pub fn new(clock_pin: u16, data_pin: u16, clock_cycle: Duration) -> io::Result<Self> {
         // Kept outside the thread so we can return the error before spawning.
-        let mut sender = BitSender::new(clock_pin, data_pin)?;
+        let mut sender = BitSender::<SysFsGpioOutput>::new(clock_pin, data_pin, clock_cycle)?;
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || -> io::Result<()> {
@@ -62,7 +63,7 @@ impl Client {
 
 /// Responsible for recieving messages from the serial bus.
 pub struct Server {
-    reciever: BitReciever,
+    reciever: BitReciever<SysFsGpioInput>,
 }
 
 impl Server {
@@ -72,7 +73,7 @@ impl Server {
     #[must_use]
     pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
         Ok(Self {
-            reciever: BitReciever::new(clock_pin, data_pin)?,
+            reciever: BitReciever::<SysFsGpioInput>::new(clock_pin, data_pin)?,
         })
     }
 
@@ -86,7 +87,15 @@ impl Server {
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
     pub async fn listen_for<T: Header>(&mut self, head: T, data_type: Data) -> io::Result<Data> {
-        let recieved_packet = self.reciever.recv()?;
+        let recieved_packet = match self.reciever.recv()? {
+            Some(v) => v,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "could not recieve packet",
+                ))
+            }
+        };
 
         // Since all recived data is made by request we should be recieving
         // exactly the listened for header, anything else is an error.
@@ -97,7 +106,7 @@ impl Server {
             ));
         }
 
-        Ok(recieved_packet.data.to_type(&data_type))
+        Ok(recieved_packet.data.to_variant(&data_type))
     }
 
     /// Listens for packets with all given heads in order, returns an error if
@@ -107,6 +116,7 @@ impl Server {
     ///
     /// * `heads` - A slice of `Header`s in the order the are expect to come.
     /// * `data_type` - Enum variant of `Data` to return.
+    #[must_use]
     pub async fn listen_for_seq<T>(&mut self, heads: &[T], data_type: Data) -> io::Result<Vec<Data>>
     where
         T: Header,
@@ -114,7 +124,15 @@ impl Server {
         let mut data = vec![Data::UnsignedInteger(0); heads.len()];
 
         for h in heads {
-            let packet = self.reciever.recv()?;
+            let packet = match self.reciever.recv()? {
+                Some(v) => v,
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "could not recieve packet",
+                    ))
+                }
+            };
 
             // Since all recived data is made by request we should be recieving
             // exactly the listened for header, anything else is an error.
@@ -125,7 +143,7 @@ impl Server {
                 ));
             }
 
-            data.push(packet.data.to_type(&data_type));
+            data.push(packet.data.to_variant(&data_type));
         }
 
         Ok(data)
@@ -140,48 +158,44 @@ impl Server {
 /// only that change from data while clock is up is, they should change at the
 /// same time. All devices will also wait for 48 bits to be sent, upon which
 /// they will assume the next bit is of a new packet.
-struct BitSender {
-    clock: SysFsGpioOutput,
-    data: SysFsGpioOutput,
+struct BitSender<T: GpioOut> {
+    clock: T,
+    data: T,
+    cycle: Duration,
 }
 
-impl BitSender {
-    /// Creates a new `BitSender` for sending data using the given clock and
-    /// data pins.
-    #[inline]
-    #[must_use]
-    pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
-        Ok(Self {
-            clock: SysFsGpioOutput::open(clock_pin)?,
-            data: SysFsGpioOutput::open(data_pin)?,
-        })
-    }
-
+impl<T: GpioOut> BitSender<T> {
     /// Puts pins in their default "waiting" state, should be preformed after
     /// construction in most case.
-    pub fn start(&mut self) -> io::Result<()> {
+    pub fn start(&mut self) -> Result<(), T::Error> {
         self.clock.set_high()?;
         self.data.set_low()?;
         Ok(())
     }
 
-    /// Sends the binary representation of the given data.
-    pub fn send<T: ToBinary>(&mut self, data: T) -> io::Result<u8> {
+    /// Sends the binary representation of the given data. Returns the number of
+    /// bits sent.
+    pub fn send<U: ToBinary>(&mut self, data: U) -> Result<u8, T::Error> {
         let (bits, bits_length) = data.to_binary();
+
+        self.start()?;
 
         // Signal data begin with both pins high.
         self.clock.set_high()?;
         self.data.set_high()?;
 
+        thread::sleep(self.cycle);
+
         for i in 0..bits_length {
-            let bit = bits >> i & 1 != 0;
+            let bit = bits << i & (1 << bits_length - 1) != 0;
 
-            // Set low to allow reading and set bit.
-            self.clock.set_low()?;
+            // Set data pin to out bit and lower clock pin to allow reading.
             self.data.set_value(bit)?;
+            self.clock.set_low()?;
 
-            // TODO: This may need to be throttled.
+            thread::sleep(self.cycle);
             self.clock.set_high()?;
+            thread::sleep(self.cycle);
         }
 
         // Go back to waiting and return.
@@ -190,32 +204,42 @@ impl BitSender {
     }
 }
 
+impl BitSender<SysFsGpioOutput> {
+    /// Creates a new `BitSender` for sending data using the given clock and
+    /// data pins.
+    ///
+    /// # Arguments
+    ///
+    /// * `clock_pin` - Pin number of the clock pin.
+    /// * `data_pin` - Pin number of the data pin.
+    /// * `clock_cycle` - Delay between each clock change, up or down.
+    #[inline]
+    #[must_use]
+    pub fn new(clock_pin: u16, data_pin: u16, clock_cycle: Duration) -> io::Result<Self> {
+        Ok(Self {
+            clock: SysFsGpioOutput::open(clock_pin)?,
+            data: SysFsGpioOutput::open(data_pin)?,
+            cycle: clock_cycle
+        })
+    }
+}
+
 /// Struct for recieving bits on a serial bus, since the instance belongs to the
 /// controller device all addresses in packets are the address of the sending
 /// device, not the recipiant.
-struct BitReciever {
-    clock: SysFsGpioInput,
-    data: SysFsGpioInput,
+struct BitReciever<T: GpioIn> {
+    clock: T,
+    data: T,
 }
 
-impl BitReciever {
-    /// Produces a new `BitReciever` given the clock and data pins to read from.
-    #[inline]
-    #[must_use]
-    pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
-        Ok(Self {
-            clock: SysFsGpioInput::open(clock_pin)?,
-            data: SysFsGpioInput::open(data_pin)?,
-        })
-    }
-
+impl<T: GpioIn> BitReciever<T> {
     /// Waits for the start signal and then reads a number of bits equal to
     /// `Packet::<GenericHeader>::BITS` and produces a new packet from them. All
     /// packets returned from this function are of type `Packet<GenericHeader>`
     /// and must have their data and headers cast to fully recover the packet's
     /// information, furthermore all addresses are of the sending device as even
     /// when recieving this remains the controller device and has no address.
-    pub fn recv(&mut self) -> io::Result<Packet<GenericHeader>> {
+    pub fn recv(&mut self) -> Result<Option<Packet<GenericHeader>>, T::Error> {
         // Wait until we see a change from clock high data low.
         while self.clock.read_value()? == GpioValue::High
             && self.data.read_value()? == GpioValue::Low
@@ -223,13 +247,10 @@ impl BitReciever {
 
         // The start of a read is stated with clock high data high, if this is
         // not the state after a no-read segment something's gone wrong.
-        if !(self.clock.read_value()? == GpioValue::High
+        while !(self.clock.read_value()? == GpioValue::High
             && self.data.read_value()? == GpioValue::High)
         {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid serial state",
-            ));
+            //return Ok(None);
         }
 
         let mut packet_bits = 0u64;
@@ -246,9 +267,25 @@ impl BitReciever {
             if self.data.read_value()? == GpioValue::High {
                 packet_bits |= 1u64;
             }
+
+            // Wait until the clock goes back to high to prevent reading the 
+            // same vaue twice.
+            while self.clock.read_value()? == GpioValue::Low {}
         }
 
-        Ok(Packet::from_binary(packet_bits))
+        Ok(Some(Packet::from_binary(packet_bits)))
+    }
+}
+
+impl BitReciever<SysFsGpioInput> {
+    /// Produces a new `BitReciever` given the clock and data pins to read from.
+    #[inline]
+    #[must_use]
+    pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
+        let clock = SysFsGpioInput::open(clock_pin)?;
+        let data = SysFsGpioInput::open(data_pin)?;
+
+        Ok(Self { clock, data })
     }
 }
 
@@ -258,7 +295,7 @@ impl BitReciever {
 /// all auxillary information should be stored in the tag and whatever is
 /// contained in the data portion of the packet should be interpretable as a
 /// single number.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Data {
     FloatingPoint(f32),
     SignedInteger(i32),
@@ -284,7 +321,7 @@ impl Data {
     ///
     /// * `self` - The data value to be converted.
     /// * `other` - Enum with the type to be converted to.
-    pub fn to_type(&self, other: &Self) -> Self {
+    pub fn to_variant(&self, other: &Self) -> Self {
         match other {
             Self::FloatingPoint(_) => match self {
                 Self::FloatingPoint(_) => *self,
@@ -357,6 +394,7 @@ impl FromBinary for Data {
 
 /// Represents a single addressed packet for the serial bus where T is the type
 /// of tag being used, this must implement the `Header` trait.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Packet<T: Header> {
     pub head: T,
     pub data: Data,
@@ -374,6 +412,14 @@ impl<T: Header> Packet<T> {
     #[must_use]
     pub fn new(tag: T, data: Data) -> Self {
         Self { head: tag, data }
+    }
+
+    /// Converts the `serial::Packet`'s `Data` to the given variant by calling
+    /// `Data::to_variant()`. Returns `self` dereferenced for convinience.
+    #[inline]
+    pub fn data_as(&mut self, variant: Data) -> Self {
+        self.data = self.data.to_variant(&variant);
+        *self
     }
 }
 
@@ -398,7 +444,7 @@ impl<T: Header> ToBinary for Packet<T> {
 }
 
 /// Generic header used mostly for returning data recieved from the serial bus.
-#[derive(Header)]
+#[derive(Header, Clone, Copy, Debug, PartialEq)]
 pub struct GenericHeader {
     pub addr: u8,
     pub cmd: u8,
@@ -425,13 +471,13 @@ impl FromBinary for GenericHeader {
 /// ```
 /// use mecanum::serial::Header;
 ///
-/// #[derive(Header)]
+/// #[derive(Header, Clone, Copy)]
 /// struct MyHeader {
 ///     addr: u8,
 ///     cmd: u8,   
 /// }
 /// ```
-pub trait Header {
+pub trait Header: Clone + Copy {
     /// The number of bits taken up by any header's address and command.
     const BITS: u32 = u8::BITS * 2;
 
@@ -491,4 +537,137 @@ pub trait FromBinary {
     /// also implemented.
     #[must_use]
     fn from_binary(bits: u64) -> Self;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BitReciever, BitSender, Data, GenericHeader, Packet};
+    use gpio::{
+        dummy::{DummyGpioIn, DummyGpioOut},
+        GpioIn, GpioValue,
+    };
+    use std::{
+        f32,
+        sync::{Arc, RwLock},
+        thread,
+        time::Duration,
+    };
+
+    #[test]
+    pub fn send_and_recv() {
+        let packets = [
+            Packet::new(
+                GenericHeader {
+                    addr: 1u8,
+                    cmd: 1u8,
+                },
+                Data::UnsignedInteger(314),
+            ),
+            Packet::new(
+                GenericHeader {
+                    addr: 5u8,
+                    cmd: 255u8,
+                },
+                Data::FloatingPoint(f32::consts::PI),
+            ),
+        ];
+
+        // Value of the clock and data pins, stored in memory for the dummy gpio
+        // inputs/outputs to interact with.
+        let clock_val = Arc::new(RwLock::new(GpioValue::Low));
+        let data_val = Arc::new(RwLock::new(GpioValue::Low));
+
+        // Clones of the pin value ARCs for use within the recieving thread.
+        let clock_val_recv = clock_val.clone();
+        let data_val_recv = data_val.clone();
+
+        // Clones of the packets to be check against within the thread.
+        let packets_recv = packets.clone();
+
+        let handle = thread::spawn(
+            move || -> Result<Vec<Packet<GenericHeader>>, <DummyGpioIn<&dyn Fn() -> GpioValue> as GpioIn>::Error> {
+                let clock_read = move || {
+                    let v = *clock_val_recv.read().unwrap(); 
+                    // println!("read clock pin to be {:?}", v);
+                    v
+                };
+
+                let data_read = move || {
+                    let v = *data_val_recv.read().unwrap(); 
+                    println!("read data pin to be {:?}", v);
+                    v
+                };
+
+                let mut reciever = BitReciever::<DummyGpioIn<&dyn Fn() -> GpioValue>>::new(
+                    &clock_read,
+                    &data_read,
+                );
+
+                let mut packets = Vec::new();
+
+                for p in packets_recv {
+                    packets.push(match reciever.recv()? {
+                        Some(p) => p,
+                        None => panic!("recieved none for {:?}", p),
+                    });
+                }
+
+                Ok(packets)
+            },
+        );
+
+        let clock_set = |v| {
+            let mut val = clock_val.write().unwrap();
+            // println!("clock pin set to {:?}", v);
+            *val = v;
+        };
+
+        let data_set = |v| {
+            let mut val = data_val.write().unwrap();
+            println!("data pin set to {:?}", v);
+            *val = v;
+        };
+
+        // Two milliseconds could be a bit fast for some hardware, but even one
+        // millisecond works for me so I'll leave it for now to speed up unit 
+        // test runs.
+        let mut sender = BitSender::<DummyGpioOut<&dyn Fn(GpioValue)>>::new(&clock_set, &data_set, Duration::from_millis(2));
+
+        sender.start().unwrap();
+
+        // Just to make sure we dont send before listening.
+        thread::sleep(Duration::from_millis(500));
+
+        for p in packets {
+            sender.send(p).unwrap();
+        }
+
+        let mut read_packets = handle.join().unwrap().unwrap();
+
+        for i in 0..packets.len() {
+            assert_eq!(packets[i], read_packets[i].data_as(packets[i].data));
+        }
+    }
+
+    impl<'a> BitSender<DummyGpioOut<&'a dyn Fn(GpioValue)>> {
+        /// Creates a new dummy `BitSender` for unit testing.
+        #[inline]
+        #[must_use]
+        fn new(clock_fn: &'a dyn Fn(GpioValue), data_fn: &'a dyn Fn(GpioValue), clock_cycle: Duration) -> Self {
+            Self {
+                clock: DummyGpioOut::new(clock_fn),
+                data: DummyGpioOut::new(data_fn),
+                cycle: clock_cycle
+            }
+        }
+    }
+
+    impl<'a> BitReciever<DummyGpioIn<&'a dyn Fn() -> GpioValue>> {
+        fn new(clock: &'a dyn Fn() -> GpioValue, data: &'a dyn Fn() -> GpioValue) -> Self {
+            Self {
+                clock: DummyGpioIn::new(clock),
+                data: DummyGpioIn::new(data),
+            }
+        }
+    }
 }

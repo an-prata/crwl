@@ -75,7 +75,7 @@ impl Controller {
     }
 }
 
-#[derive(Header)]
+#[derive(Header, Clone, Copy)]
 pub struct McHeader {
     addr: u8,
     cmd: u8,

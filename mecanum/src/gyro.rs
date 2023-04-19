@@ -191,7 +191,7 @@ impl Request {
 }
 
 /// Represents packet headers used by the gyro.
-#[derive(Header)]
+#[derive(Header, Clone, Copy)]
 struct GyroHeader {
     pub addr: u8,
     pub cmd: u8,
