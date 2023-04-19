@@ -5,12 +5,13 @@
 mod log;
 use gilrs::{Axis, Button, EventType, Gilrs};
 use mecanum::{angle::Angle, gyro, headless::DriveMode, motor, serial, DriveState, DriveVector};
-use std::error::Error;
+use std::{error::Error, time::Duration};
 
 const CLIENT_CLOCK_PIN: u16 = 0u16;
 const CLIENT_DATA_PIN: u16 = 1u16;
 const SERVER_CLOCK_PIN: u16 = 2u16;
 const SERVER_DATA_PIN: u16 = 3u16;
+const SERIAL_CYCLE_TIME: Duration = Duration::from_millis(10);
 
 const GYRO_ADDR: u8 = 4u8;
 
@@ -26,7 +27,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut gilrs = Gilrs::new()?;
     let mut gamepad_id = None;
 
-    let mut serial_client = serial::Client::new(CLIENT_CLOCK_PIN, CLIENT_DATA_PIN)?;
+    let mut serial_client =
+        serial::Client::new(CLIENT_CLOCK_PIN, CLIENT_DATA_PIN, SERIAL_CYCLE_TIME)?;
     let mut serial_server = serial::Server::new(SERVER_CLOCK_PIN, SERVER_DATA_PIN)?;
 
     let mut gyro = gyro::Controller::new(GYRO_ADDR);
