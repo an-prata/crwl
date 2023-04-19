@@ -247,10 +247,10 @@ impl<T: GpioIn> BitReciever<T> {
 
         // The start of a read is stated with clock high data high, if this is
         // not the state after a no-read segment something's gone wrong.
-        while !(self.clock.read_value()? == GpioValue::High
+        if !(self.clock.read_value()? == GpioValue::High
             && self.data.read_value()? == GpioValue::High)
         {
-            //return Ok(None);
+            return Ok(None);
         }
 
         let mut packet_bits = 0u64;
