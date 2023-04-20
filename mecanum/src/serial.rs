@@ -503,6 +503,7 @@ pub trait ToBinary {
     /// from the right, that are part of the binary representation.
     ///
     /// # Examples (First element in binary)
+    ///
     /// 8 -> (...1000, 4)
     /// 3 -> (...11, 2)
     /// 3 -> (...00000011, 8)
