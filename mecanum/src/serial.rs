@@ -87,7 +87,7 @@ impl Server {
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
     pub async fn listen_for<T: Header>(&mut self, head: T, data_type: Data) -> io::Result<Data> {
-        let recieved_packet = match self.reciever.recv()? {
+        let recieved_packet = match self.reciever.recv(Packet::<GenericHeader>::BITS)? {
             Some(v) => v,
             None => {
                 return Err(io::Error::new(
@@ -124,26 +124,7 @@ impl Server {
         let mut data = vec![Data::UnsignedInteger(0); heads.len()];
 
         for h in heads {
-            let packet = match self.reciever.recv()? {
-                Some(v) => v,
-                None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "could not recieve packet",
-                    ))
-                }
-            };
-
-            // Since all recived data is made by request we should be recieving
-            // exactly the listened for header, anything else is an error.
-            if packet.head.addr() != h.addr() || packet.head.cmd() != h.cmd() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "recieved header did not match one provided",
-                ));
-            }
-
-            data.push(packet.data.to_variant(&data_type));
+            data.push(self.listen_for(*h, data_type).await?);
         }
 
         Ok(data)
@@ -239,7 +220,11 @@ impl<T: GpioIn> BitReciever<T> {
     /// and must have their data and headers cast to fully recover the packet's
     /// information, furthermore all addresses are of the sending device as even
     /// when recieving this remains the controller device and has no address.
-    pub fn recv(&mut self) -> Result<Option<Packet<GenericHeader>>, T::Error> {
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Size of the data to recieve in bits.
+    pub fn recv(&mut self, size: u32) -> Result<Option<Packet<GenericHeader>>, T::Error> {
         // Wait until we see a change from clock high data low.
         while self.clock.read_value()? == GpioValue::High
             && self.data.read_value()? == GpioValue::Low
@@ -257,7 +242,7 @@ impl<T: GpioIn> BitReciever<T> {
 
         // Read the packet, each new bit gets placed in the ones digit and then
         // shifted over.
-        for _ in 0..Packet::<GenericHeader>::BITS {
+        for _ in 0..size {
             // On the first loop this does nothing.
             packet_bits <<= 1;
 
@@ -541,7 +526,7 @@ pub trait FromBinary {
 
 #[cfg(test)]
 mod tests {
-    use super::{BitReciever, BitSender, Data, GenericHeader, Packet};
+    use super::{self, BitReciever, BitSender, Data, GenericHeader, Packet};
     use gpio::{
         dummy::{DummyGpioIn, DummyGpioOut},
         GpioIn, GpioValue,
@@ -606,7 +591,7 @@ mod tests {
                 let mut packets = Vec::new();
 
                 for p in packets_recv {
-                    packets.push(match reciever.recv()? {
+                    packets.push(match reciever.recv(Packet::<GenericHeader>::BITS)? {
                         Some(p) => p,
                         None => panic!("recieved none for {:?}", p),
                     });
