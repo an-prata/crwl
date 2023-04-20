@@ -395,8 +395,8 @@ impl<T: Header> Packet<T> {
     /// type and handling information is contained in `tag`, and all data can be
     /// found in the `data` parameter.
     #[must_use]
-    pub fn new(tag: T, data: Data) -> Self {
-        Self { head: tag, data }
+    pub fn new(head: T, data: Data) -> Self {
+        Self { head, data }
     }
 
     /// Converts the `serial::Packet`'s `Data` to the given variant by calling
