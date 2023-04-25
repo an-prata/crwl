@@ -17,12 +17,33 @@ fn impl_aprox_eq(input: &DeriveInput) -> TokenStream {
 
     let gen = quote! {
         impl Header for #name {
-            fn addr(&self) -> u8 {
-                self.addr
+            fn get(&self) -> (u8, u8) {
+                (self.addr, self.cmd)
             }
 
-            fn cmd(&self) -> u8 {
-                self.cmd
+            fn extract<T>(packet: &serial::Packet<(u8, u8), T>) -> Self
+            where
+                T: serial::Data
+            {
+                Self {
+                    addr: packet.head.0,
+                    cmd: packet.head.1,
+                }
+            }
+        }
+
+        impl Into<(u8, u8)> for #name {
+            fn into(&self) -> (u8, u8) {
+                self.get()
+            }
+        }
+
+        impl From<(u8, u8)> for #name {
+            fn from(tup: (u8, u8)) -> Self {
+                Self {
+                    addr: tup.0,
+                    cmd: tup.1,
+                }
             }
         }
     };

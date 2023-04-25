@@ -29,7 +29,7 @@ impl Controller {
     /// `serial::Client`. This packet will instruct the LED light controller to
     /// match the state of `self`.
     #[must_use]
-    pub fn gen_packet(&mut self) -> serial::Packet<LedHeader> {
+    pub fn gen_packet(&mut self) -> serial::Packet<LedHeader, Color> {
         serial::Packet::new(
             LedHeader::new(self.addr, LedCommand::Set),
             serial::Data::UnsignedInteger(match self.color {
@@ -177,6 +177,19 @@ impl Color {
 
         self.hsv = Some((h, s, max));
         (h, s, max)
+    }
+}
+
+impl serial::Data for Color {
+    fn extract<T>(packet: &serial::Packet<T, u32>) -> Self
+    where
+        T: Header,
+    {
+        todo!()
+    }
+
+    fn get(&self) -> u32 {
+        self.gen_u32()
     }
 }
 

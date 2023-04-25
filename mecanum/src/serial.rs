@@ -16,7 +16,7 @@ use std::{
 
 /// Responisble for sending out commands to devices on a serial bus.
 pub struct Client {
-    tx: Sender<BinaryData>,
+    tx: Sender<SerialData>,
 }
 
 impl Client {
@@ -30,7 +30,7 @@ impl Client {
 
         thread::spawn(move || -> io::Result<()> {
             loop {
-                let packet: BinaryData = match rx.recv() {
+                let packet: SerialData = match rx.recv() {
                     Ok(p) => p,
 
                     // Returning here makes it so that when the transmitter, and
@@ -52,11 +52,12 @@ impl Client {
     /// the `Client` instance's thread has returned with an error, which would
     /// suggest that an `io::Error` has occured internally.
     #[inline]
-    pub fn send<T>(&mut self, packet: Packet<T>) -> Result<T, SendError<BinaryData>>
+    pub fn send<T, U>(&mut self, packet: &Packet<T, U>) -> Result<T, SendError<SerialData>>
     where
         T: Header,
+        U: Data,
     {
-        self.tx.send(packet.to_binary())?;
+        self.tx.send((*packet).into())?;
         Ok(packet.head)
     }
 }
@@ -86,9 +87,20 @@ impl Server {
     /// * `head` - Packet head to listen for.
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
-    pub async fn listen_for<T: Header>(&mut self, head: T, data_type: Data) -> io::Result<Data> {
-        let recieved_packet = match self.reciever.recv(Packet::<GenericHeader>::BITS)? {
-            Some(v) => v,
+    pub async fn listen_for<T, U>(&mut self, head: T) -> io::Result<U> 
+    where 
+        T: Header,
+        U: Data
+    {
+        let recieved_packet = match self.reciever.recv(Packet::<(u8, u8), u32>::BITS as u8)? {
+            Some(v) => {
+                let (bits, size) = v;
+                let addr = (bits >> (u8::BITS + u32::BITS)) as u8;
+                let cmd = (bits >> u32::BITS) as u8;
+                let data = bits as u32;
+
+                Packet::new((addr, cmd), data)
+            },
             None => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -99,14 +111,14 @@ impl Server {
 
         // Since all recived data is made by request we should be recieving
         // exactly the listened for header, anything else is an error.
-        if recieved_packet.head.addr() != head.addr() || recieved_packet.head.cmd() != head.cmd() {
+        if recieved_packet.head.get() != head.get() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "recieved header did not match one provided",
             ));
         }
 
-        Ok(recieved_packet.data.to_variant(&data_type))
+        Ok(U::extract(&recieved_packet))
     }
 
     /// Listens for packets with all given heads in order, returns an error if
@@ -117,14 +129,15 @@ impl Server {
     /// * `heads` - A slice of `Header`s in the order the are expect to come.
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
-    pub async fn listen_for_seq<T>(&mut self, heads: &[T], data_type: Data) -> io::Result<Vec<Data>>
+    pub async fn listen_for_seq<T, U>(&mut self, heads: &[T]) -> io::Result<Vec<U>>
     where
         T: Header,
+        U: Data
     {
-        let mut data = vec![Data::UnsignedInteger(0); heads.len()];
+        let mut data: Vec<U> = Vec::new();
 
         for h in heads {
-            data.push(self.listen_for(*h, data_type).await?);
+            data.push(self.listen_for::<T, U>(*h).await?);
         }
 
         Ok(data)
@@ -156,8 +169,8 @@ impl<T: GpioOut> BitSender<T> {
 
     /// Sends the binary representation of the given data. Returns the number of
     /// bits sent.
-    pub fn send<U: ToBinary>(&mut self, data: U) -> Result<u8, T::Error> {
-        let (bits, bits_length) = data.to_binary();
+    pub fn send(&mut self, data: SerialData) -> Result<u8, T::Error> {
+        let (bits, bits_length) = data;
 
         self.start()?;
 
@@ -215,8 +228,8 @@ struct BitReciever<T: GpioIn> {
 
 impl<T: GpioIn> BitReciever<T> {
     /// Waits for the start signal and then reads a number of bits equal to
-    /// `Packet::<GenericHeader>::BITS` and produces a new packet from them. All
-    /// packets returned from this function are of type `Packet<GenericHeader>`
+    /// `Packet::<(u8, u8), u32>::BITS` and produces a new packet from them. All
+    /// packets returned from this function are of type `Packet<(u8, u8), u32>`
     /// and must have their data and headers cast to fully recover the packet's
     /// information, furthermore all addresses are of the sending device as even
     /// when recieving this remains the controller device and has no address.
@@ -224,7 +237,7 @@ impl<T: GpioIn> BitReciever<T> {
     /// # Arguments
     ///
     /// * `size` - Size of the data to recieve in bits.
-    pub fn recv(&mut self, size: u32) -> Result<Option<Packet<GenericHeader>>, T::Error> {
+    pub fn recv(&mut self, size: u8) -> Result<Option<SerialData>, T::Error> {
         // Wait until we see a change from clock high data low.
         while self.clock.read_value()? == GpioValue::High
             && self.data.read_value()? == GpioValue::Low
@@ -258,7 +271,7 @@ impl<T: GpioIn> BitReciever<T> {
             while self.clock.read_value()? == GpioValue::Low {}
         }
 
-        Ok(Some(Packet::from_binary(packet_bits)))
+        Ok(Some((packet_bits, size)))
     }
 }
 
@@ -274,184 +287,97 @@ impl BitReciever<SysFsGpioInput> {
     }
 }
 
-/// Packet data, always a 32 bit size but can be of floating point, signed
-/// integral, or unsigned integral types. Exactly how this information is used
-/// is up to the receiving device and its controlling instance but if possible
-/// all auxillary information should be stored in the tag and whatever is
-/// contained in the data portion of the packet should be interpretable as a
-/// single number.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Data {
-    FloatingPoint(f32),
-    SignedInteger(i32),
-    UnsignedInteger(u32),
-}
-
-impl Data {
-    /// Size of any value from a `Data` enum in bytes, does not reflect actual
-    /// memory required for storing the enum, only its value, which is always 32
-    /// bit.
-    pub const SIZE: usize = mem::size_of::<u32>();
-
-    /// Size of any value from a `Data` enum in bits, does not reflect actual
-    /// memory required for storing the enum, only its value, which is always 32
-    /// bit.
-    pub const BITS: u32 = u32::BITS;
-
-    /// Converts `self` to data of type `other`, the value of `other` is
-    /// ignored. All conversion are bitwise and preserve the underlying data to
-    /// help facilitate data recovery over serial.
-    ///
-    /// # Arguments
-    ///
-    /// * `self` - The data value to be converted.
-    /// * `other` - Enum with the type to be converted to.
-    pub fn to_variant(&self, other: &Self) -> Self {
-        match other {
-            Self::FloatingPoint(_) => match self {
-                Self::FloatingPoint(_) => *self,
-                Self::SignedInteger(n) => Self::FloatingPoint(f32::from_bits(*n as u32)),
-                Self::UnsignedInteger(n) => Self::FloatingPoint(f32::from_bits(*n)),
-            },
-
-            Self::SignedInteger(_) => match self {
-                Self::FloatingPoint(n) => Self::SignedInteger(n.to_bits() as i32),
-                Self::SignedInteger(_) => *self,
-                Self::UnsignedInteger(n) => Self::SignedInteger(*n as i32),
-            },
-
-            Self::UnsignedInteger(_) => match self {
-                Self::FloatingPoint(n) => Self::UnsignedInteger(n.to_bits()),
-                Self::SignedInteger(n) => Self::UnsignedInteger(*n as u32),
-                Self::UnsignedInteger(_) => *self,
-            },
-        }
-    }
-}
-
-impl Into<f32> for Data {
-    fn into(self) -> f32 {
-        match self {
-            Self::FloatingPoint(n) => n,
-            _ => panic!("not a floating point number"),
-        }
-    }
-}
-
-impl Into<i32> for Data {
-    fn into(self) -> i32 {
-        match self {
-            Self::SignedInteger(n) => n,
-            _ => panic!("not a signed integer"),
-        }
-    }
-}
-
-impl Into<u32> for Data {
-    fn into(self) -> u32 {
-        match self {
-            Self::UnsignedInteger(n) => n,
-            _ => panic!("not an unsigned integer"),
-        }
-    }
-}
-
-impl ToBinary for Data {
-    /// `to_binary()` will always be a number of bits equal to `Data::BITS` and
-    /// can be cast to a `u32` without the loss of data.
-    fn to_binary(&self) -> BinaryData {
-        match self {
-            Self::FloatingPoint(n) => (n.to_bits() as u64, Self::BITS as u8),
-            Self::SignedInteger(n) => (*n as u64, Self::BITS as u8),
-            Self::UnsignedInteger(n) => (*n as u64, Self::BITS as u8),
-        }
-    }
-}
-
-impl FromBinary for Data {
-    /// `from_binary()` will return a `Data::UnsignedInteger`, this will have to
-    /// be cast based on data from a packet header in order to recover the
-    /// actual packet data.
-    fn from_binary(bits: u64) -> Self {
-        Self::UnsignedInteger(bits as u32)
-    }
-}
-
 /// Represents a single addressed packet for the serial bus where T is the type
 /// of tag being used, this must implement the `Header` trait.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Packet<T: Header> {
+pub struct Packet<T, U> 
+where
+    T: Header,
+    U: Data,
+{
     pub head: T,
-    pub data: Data,
+    pub data: U,
 }
 
-impl<T: Header> Packet<T> {
+impl<T, U> Packet<T, U> 
+where 
+    T: Header,
+    U: Data,
+{
     /// Number of bits in each packet as sent over serial, does not reflect
     /// actual size in computer memory which is made different by alignment and
     /// tag information stored in enums.
-    pub const BITS: u32 = (mem::size_of::<u8>() * 2 * 8) as u32 + Data::BITS;
+    pub const BITS: u32 = (mem::size_of::<u8>() * 2 * 8) as u32 + u32::BITS;
 
     /// Creates a new packet, for a device at the given address, in which all
     /// type and handling information is contained in `tag`, and all data can be
     /// found in the `data` parameter.
     #[must_use]
-    pub fn new(head: T, data: Data) -> Self {
+    pub fn new(head: T, data: U) -> Self {
         Self { head, data }
-    }
-
-    /// Converts the `serial::Packet`'s `Data` to the given variant by calling
-    /// `Data::to_variant()`. Returns `self` dereferenced for convinience.
-    #[inline]
-    pub fn data_as(&mut self, variant: Data) -> Self {
-        self.data = self.data.to_variant(&variant);
-        *self
     }
 }
 
-impl FromBinary for Packet<GenericHeader> {
-    fn from_binary(bits: u64) -> Self {
+impl<T, U> From<SerialData> for Packet<T, U> 
+where
+    T: Header,
+    U: Data,
+{
+    fn from(data: SerialData) -> Self {
+        let (bits, size) = data;
+        let addr = (bits >> (u8::BITS + u32::BITS)) as u8;
+        let cmd = (bits >> u32::BITS) as u8;
+        let data = bits as u32;
+
         Self {
-            head: GenericHeader::from_binary(bits >> Data::BITS),
-            data: Data::from_binary(bits),
+            head: T::from((addr, cmd)),
+            data: U::extract(&Packet::new((addr, cmd), data)),
         }
     }
 }
 
-impl<T: Header> ToBinary for Packet<T> {
+impl<T, U> Into<SerialData> for Packet<T, U> 
+where
+    T: Header,
+    U: Data,
+{
     /// Every return value of `to_bits()` for `Packet` will have a second value
     /// equal to `Packet::<T>::BITS`.
-    fn to_binary(&self) -> BinaryData {
-        let (data, data_bits) = self.data.to_binary();
-        let head = self.head.to_binary().0 << data_bits;
+    fn into(self) -> SerialData {
+        let data = self.data.get() as u64;
+        let head = self.head.get_shifted();
 
         (0u64 | head | data, Self::BITS as u8)
     }
 }
 
-/// Generic header used mostly for returning data recieved from the serial bus.
-#[derive(Header, Clone, Copy, Debug, PartialEq)]
-pub struct GenericHeader {
-    pub addr: u8,
-    pub cmd: u8,
-}
+impl Header for (u8, u8) {
+    fn extract<T>(packet: &Packet<(u8, u8), T>) -> Self 
+    where
+        T: Data
+    {
+        packet.head
+    }
 
-impl FromBinary for GenericHeader {
-    fn from_binary(bits: u64) -> Self {
-        Self {
-            addr: (bits >> u8::BITS) as u8,
-            cmd: bits as u8,
-        }
+    fn get(&self) -> Self {
+        *self
     }
 }
 
 /// Trait for representing a packet tag, used for distinguishing different
 /// commands, data types, etc. and used for addressing data to a specific
-/// device.
+/// device. Should be comvertable to and from a `(u8, u8)`, the first integer
+/// being the address and second being the command.
 ///
 /// ## Derivable
 ///
 /// Deriving this trait will implement it's required functions so that they
-/// return a feild of the same name.
+/// return a feild of the same name. `Into<(u8, u8)>` is also implemented using
+/// the fields of the appropriate name.
+///
+/// The derived implementation of `Header` will not compile if the deriving 
+/// struct has more fields than just `addr` and `cmd` as `Header::extract()`
+/// requires construction of the struct with only those parameters.
 ///
 /// ```
 /// use mecanum::serial::Header;
@@ -462,72 +388,76 @@ impl FromBinary for GenericHeader {
 ///     cmd: u8,   
 /// }
 /// ```
-pub trait Header: Clone + Copy {
+pub trait Header: Clone + Copy + Into<(u8, u8)> + From<(u8, u8)> {
     /// The number of bits taken up by any header's address and command.
     const BITS: u32 = u8::BITS * 2;
 
-    /// Gets the address of the tag, this will be checked by all devices on the
-    /// bus and be used to determine which device should utilise the rest of the
-    /// packet.
-    fn addr(&self) -> u8;
+    /// Contruct a new `Header` instance given the packet it belongs to.
+    #[must_use]
+    fn extract<T>(packet: &Packet<(u8, u8), T>) -> Self
+    where
+        T: Data;
 
-    /// Gets the command of the tag, should be used to denote type information
-    /// and instruct the device on how to utilize the packet's data. The
-    /// definition of exactly what this means is up to the device and controller
+    /// Get the binary representation of this `Header`'s address and command, in
+    /// that order. 
+    ///
+    /// The address of the tag will be checked by all devices on the bus and be 
+    /// used to determine which device should utilise the rest of the packet.
+    ///
+    /// The command of the tag should be used to denote type information and 
+    /// instruct the device on how to utilize the packet's data. The definition 
+    /// of exactly what this means is up to the device and controller 
     /// implementation.
-    fn cmd(&self) -> u8;
-}
+    #[must_use]
+    fn get(&self) -> (u8, u8);
 
-impl<T: Header> ToBinary for T {
-    fn to_binary(&self) -> BinaryData {
-        let addr: u64 = (self.addr() as u64) << u8::BITS;
-        let cmd: u64 = self.cmd() as u64;
-
-        (0u64 | addr | cmd, Self::BITS as u8)
+    /// Like `Header::get()` but returns the values shifted to their appropriate
+    /// place in a single `u64` for sending over serial.
+    #[inline]
+    #[must_use]
+    fn get_shifted(&self) -> u64 {
+        let (addr, cmd) = self.get();
+        ((addr as u64) << (u8::BITS + u32::BITS)) | ((cmd as u64) << u8::BITS)
     }
 }
 
-impl ToBinary for BinaryData {
-    fn to_binary(&self) -> BinaryData {
+impl Data for u32 {
+    fn extract<T>(packet: &Packet<T, u32>) -> Self 
+    where
+        T: Header
+    {
+        packet.data
+    }
+
+    fn get(&self) -> u32 {
         *self
     }
+
+    // I'm not using `u32` and `Self` interchangeably to denote which are 
+    // explicitly `u32` and which are implicitly so as defined in the `Data`
+    // trait.
 }
 
-/// Represents a binary representation of data.
-type BinaryData = (u64, u8);
+/// Represents the data of a packet sent over the serial bus. Must be fully
+/// convertable to a 32 bit unsigned integer (even if the interpretation of
+/// such is non-sensical), this means that whatever data is contained in the
+/// implementer should be stored within 32 bits.
+pub trait Data: Clone + Copy {
+    /// Construct a new `Data` instance given generic 32 bit data in the form of
+    /// a `u32`, this is likely data retrieved directly from the serial bus.
+    fn extract<T>(packet: &Packet<T, u32>) -> Self
+    where
+        T: Header;
 
-/// Represents an object that can be converted to a binary representation.
-pub trait ToBinary {
-    /// Converts `self` to its binary representation in a tuple where the first
-    /// item is the binary data, and the second is the number of bits, starting
-    /// from the right, that are part of the binary representation.
-    ///
-    /// # Examples (First element in binary)
-    ///
-    /// 8 -> (...1000, 4)
-    /// 3 -> (...11, 2)
-    /// 3 -> (...00000011, 8)
-    ///
-    /// Note that all of these are valid, so long as the number of buts required
-    /// to represent the object is equal to the value of the second item. Any
-    /// return value in which the second item is greator than the number of bits
-    /// in the first is necessarily invalid.
-    #[must_use]
-    fn to_binary(&self) -> BinaryData;
-}
+    fn get(&self) -> u32;
+} 
 
-/// Represents an object that can be constructed from its binary representation.
-pub trait FromBinary {
-    /// Produces a new `Self` object given a 64 bit binary representation. This
-    /// should be symmetrical with `ToBinary`'s `to_binary()` method if it is
-    /// also implemented.
-    #[must_use]
-    fn from_binary(bits: u64) -> Self;
-}
+/// Represents a binary representation of data that can be send via serial.
+type SerialData = (u64, u8);
 
 #[cfg(test)]
 mod tests {
-    use super::{self, BitReciever, BitSender, Data, GenericHeader, Packet};
+    use super::{BitReciever, BitSender, Data, Packet};
     use gpio::{
         dummy::{DummyGpioIn, DummyGpioOut},
         GpioIn, GpioValue,
@@ -542,20 +472,8 @@ mod tests {
     #[test]
     pub fn send_and_recv() {
         let packets = [
-            Packet::new(
-                GenericHeader {
-                    addr: 1u8,
-                    cmd: 1u8,
-                },
-                Data::UnsignedInteger(314),
-            ),
-            Packet::new(
-                GenericHeader {
-                    addr: 5u8,
-                    cmd: 255u8,
-                },
-                Data::FloatingPoint(f32::consts::PI),
-            ),
+            Packet::new((1u8, 1u8), 314u32),
+            Packet::new((5u8, 255u8), f32::consts::PI.to_bits()),
         ];
 
         // Value of the clock and data pins, stored in memory for the dummy gpio
@@ -571,7 +489,7 @@ mod tests {
         let packets_recv = packets.clone();
 
         let handle = thread::spawn(
-            move || -> Result<Vec<Packet<GenericHeader>>, <DummyGpioIn<&dyn Fn() -> GpioValue> as GpioIn>::Error> {
+            move || -> Result<Vec<Packet<(u8, u8), u32>>, <DummyGpioIn<&dyn Fn() -> GpioValue> as GpioIn>::Error> {
                 let clock_read = move || {
                     let v = *clock_val_recv.read().unwrap(); 
                     // println!("read clock pin to be {:?}", v);
@@ -589,11 +507,11 @@ mod tests {
                     &data_read,
                 );
 
-                let mut packets = Vec::new();
+                let mut packets: Vec<Packet<(u8, u8), u32>> = Vec::new();
 
                 for p in packets_recv {
-                    packets.push(match reciever.recv(Packet::<GenericHeader>::BITS)? {
-                        Some(p) => p,
+                    packets.push(match reciever.recv(Packet::<(u8, u8), u32>::BITS as u8)? {
+                        Some(p) => Packet::<(u8, u8), u32>::from(p),
                         None => panic!("recieved none for {:?}", p),
                     });
                 }
@@ -625,13 +543,13 @@ mod tests {
         thread::sleep(Duration::from_millis(500));
 
         for p in packets {
-            sender.send(p).unwrap();
+            sender.send(p.into()).unwrap();
         }
 
         let mut read_packets = handle.join().unwrap().unwrap();
 
         for i in 0..packets.len() {
-            assert_eq!(packets[i], read_packets[i].data_as(packets[i].data));
+            assert_eq!(packets[i], read_packets[i]);
         }
     }
 
