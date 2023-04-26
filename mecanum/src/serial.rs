@@ -327,51 +327,11 @@ where
 
     /// Gets the generic integer representation of the packet.
     #[inline]
-    pub fn data_as(&mut self, variant: Data) -> Self {
-        self.data = self.data.to_variant(&variant);
-        *self
-    }
-}
-
-impl<T, U> TryFrom<SerialData> for Packet<T, U>
-where
-    T: Header,
-    U: Data,
-{
-    type Error = ExtractionError;
-
-    /// Assembles a `Packet<T, U>` where `T` and `U` are the specified
-    /// implementations of `Header` and `Data` respectively. If you are looking
-    /// so simply parse `SerialData` into integers you can avoid errors by using
-    /// `Packet::parse()`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::f32;
-    /// use mecanum::serial;
-    ///
-    /// let packet = serial::Packet::new((1u8, 42u8), f32::consts::PI.to_bits());
-    /// let serial_data: serial::SerialData = packet.into();
-    ///
-    /// // Yea, specifying type arguments here is annoying but I wanted it to
-    /// // be an associated function...
-    /// let new_packet = serial::Packet::<(u8, u8), f32>::try_from(serial_data).unwrap();
-    ///
-    /// // Both the header and binary representation of each packet's data will
-    /// // be equal, but their data feilds are of different types.
-    /// assert_eq!(packet.head, new_packet.head);
-    /// assert_eq!(packet.get(), new_packet.get());
-    ///
-    /// // This wont compil because they have different types for data.
-    /// //assert_eq!(packet, new_packet);
-    ///
-    /// ```
-    fn try_from(value: SerialData) -> ExtractionResult<Self> {
-        let (bits, size) = value;
-
-        if size != Self::BITS as u8 {
-            return Err(ExtractionError);
+    #[must_use]
+    pub fn get(self) -> Packet<(u8, u8), u32> {
+        Packet::<(u8, u8), u32> {
+            head: self.head.get(),
+            data: self.data.get(),
         }
     }
 
