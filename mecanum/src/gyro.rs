@@ -103,7 +103,7 @@ impl Controller {
     ) -> io::Result<f32> {
         let packet = serial::Packet::new(self.gen_header(req), 0u32);
 
-        let head = match client.send(&packet) {
+        let head = match client.send(packet) {
             Ok(h) => h,
             Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
         };

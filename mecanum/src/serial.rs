@@ -56,12 +56,12 @@ impl Client {
     /// serial, only that it was successfully sent to the thread for that
     /// purpose.
     #[inline]
-    pub fn send<T, U>(&mut self, packet: &Packet<T, U>) -> Result<T, SendError<SerialData>>
+    pub fn send<T, U>(&mut self, packet: Packet<T, U>) -> Result<T, SendError<SerialData>>
     where
         T: Header,
         U: Data,
     {
-        self.tx.send((*packet).into())?;
+        self.tx.send(packet.into())?;
         Ok(packet.head)
     }
 }
