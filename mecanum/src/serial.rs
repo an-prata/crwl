@@ -406,7 +406,7 @@ where
     U: Data,
 {
     /// Every return value of `into()` for `Packet` will have a second value
-    /// equal to `Packet::<T>::BITS`.
+    /// equal to `Packet::<(u8, u8), u32>::BITS`.
     fn into(self) -> SerialData {
         let data = self.data.get() as u64;
         let head = self.head.get_shifted();
@@ -415,8 +415,12 @@ where
     }
 }
 
+/// Result from extracting either `Header` or `Data` from a
+/// `Packet<(u8, u8), u32>`.
 pub type ExtractionResult<T> = Result<T, ExtractionError>;
 
+/// Error from extracting either `Header` or `Data` from a
+/// `Packet<(u8, u8), u32>`.
 #[derive(Debug, Clone, Copy)]
 pub struct ExtractionError;
 
@@ -439,6 +443,38 @@ impl Header for (u8, u8) {
 
     fn get(&self) -> Self {
         *self
+    }
+}
+
+impl Data for u32 {
+    fn extract<T, U>(packet: &Packet<T, U>) -> ExtractionResult<Self>
+    where
+        T: Header,
+        U: Data,
+    {
+        Ok(packet.data.get())
+    }
+
+    fn get(&self) -> u32 {
+        *self
+    }
+
+    // I'm not using `u32` and `Self` interchangeably to denote which are
+    // explicitly `u32` and which are implicitly so as defined in the `Data`
+    // trait.
+}
+
+impl Data for f32 {
+    fn extract<T, U>(packet: &Packet<T, U>) -> ExtractionResult<Self>
+    where
+        T: Header,
+        U: Data,
+    {
+        Ok(f32::from_bits(packet.data.get()))
+    }
+
+    fn get(&self) -> u32 {
+        self.to_bits()
     }
 }
 
@@ -479,38 +515,6 @@ pub trait Header: Clone + Copy {
     fn get_shifted(&self) -> u64 {
         let (addr, cmd) = self.get();
         ((addr as u64) << (u8::BITS + u32::BITS)) | ((cmd as u64) << u32::BITS)
-    }
-}
-
-impl Data for u32 {
-    fn extract<T, U>(packet: &Packet<T, U>) -> ExtractionResult<Self>
-    where
-        T: Header,
-        U: Data,
-    {
-        Ok(packet.data.get())
-    }
-
-    fn get(&self) -> u32 {
-        *self
-    }
-
-    // I'm not using `u32` and `Self` interchangeably to denote which are
-    // explicitly `u32` and which are implicitly so as defined in the `Data`
-    // trait.
-}
-
-impl Data for f32 {
-    fn extract<T, U>(packet: &Packet<T, U>) -> ExtractionResult<Self>
-    where
-        T: Header,
-        U: Data,
-    {
-        Ok(f32::from_bits(packet.data.get()))
-    }
-
-    fn get(&self) -> u32 {
-        self.to_bits()
     }
 }
 
