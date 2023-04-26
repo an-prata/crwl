@@ -2,23 +2,9 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use crate::serial;
+use crate::serial::{self, Header};
 use core::fmt;
-use serial::Header;
 use std::error::Error;
-
-/// Spawns a thread for sending the given motor controller instance's data to
-/// the physical motor controller. Assumes the instance to be
-/// `Arc<RwLock<MotorController>>` and will produce a clone of the `Arc`.
-#[macro_export]
-macro_rules! spawn_motor_thread {
-    ($controller:expr) => {
-        let controller_clone = $controller.clone();
-        thread::spawn(move || loop {
-            controller_clone.write().unwrap().send().unwrap();
-        })
-    };
-}
 
 /// A scruct for interfacing with an arduino motor controller.
 #[derive(Debug)]
@@ -28,6 +14,9 @@ pub struct Controller {
 
     /// Set speed of the controller.
     speed: f32,
+
+    /// State of the motor controller.
+    state: State,
 }
 
 impl Controller {
@@ -43,7 +32,11 @@ impl Controller {
     /// pins associated with it.
     #[must_use]
     pub fn new(addr: u8) -> Self {
-        Controller { addr, speed: 0f32 }
+        Controller {
+            addr,
+            speed: 0f32,
+            state: State::Disabled,
+        }
     }
 
     /// Sets the desired motor speed. Returns an error if `speed` is infinite or
@@ -64,38 +57,129 @@ impl Controller {
         self.speed
     }
 
+    /// Gets the state of the motor controller.
+    #[inline]
+    #[must_use]
+    pub fn state(&self) -> State {
+        self.state
+    }
+
+    /// Set the state of the motor. Returns `None` if the given state is the
+    /// same as current.
+    #[must_use]
+    pub fn set_state(&mut self, state: State) -> Option<serial::Packet<MotorHeader, MotorData>> {
+        if self.state == state {
+            return None;
+        }
+
+        self.state = state;
+
+        Some(serial::Packet::new(
+            MotorHeader {
+                addr: self.addr,
+                cmd: MotorCmd::SetState,
+            },
+            MotorData::State(self.state as u32),
+        ))
+    }
+
     /// Generates a serial packet that can be sent by a `serial::Client` to the
     /// motor.
     #[must_use]
-    pub fn gen_packet(&self) -> serial::Packet<McHeader> {
-        serial::Packet::<McHeader>::new(
-            McHeader::new(self.addr, McCmd::SetSpeed),
-            serial::Data::FloatingPoint(self.speed),
+    pub fn gen_packet(&self) -> serial::Packet<MotorHeader, MotorData> {
+        serial::Packet::new(
+            MotorHeader {
+                addr: self.addr,
+                cmd: MotorCmd::SetSpeed,
+            },
+            MotorData::Speed(self.speed),
         )
     }
 }
 
-#[derive(Header, Clone, Copy)]
-pub struct McHeader {
-    addr: u8,
-    cmd: u8,
+/// A motor controller state.
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum State {
+    Enabled = 1u32,
+    Disabled = 2u32,
 }
 
-impl McHeader {
-    #[must_use]
-    fn new(addr: u8, cmd: McCmd) -> Self {
-        Self {
-            addr,
-            cmd: cmd as u8,
+/// Represents a serial packet header intended for a motr controller.
+#[derive(Clone, Copy)]
+pub struct MotorHeader {
+    pub(crate) addr: u8,
+    pub(crate) cmd: MotorCmd,
+}
+
+impl serial::Header for MotorHeader {
+    fn extract<T, U>(packet: &serial::Packet<T, U>) -> serial::ExtractionResult<Self>
+    where
+        T: serial::Header,
+        U: serial::Data,
+    {
+        match packet.head.get() {
+            (a, c) if c == MotorCmd::SetSpeed as u8 => Ok(Self {
+                addr: a,
+                cmd: MotorCmd::SetSpeed,
+            }),
+
+            (a, c) if c == MotorCmd::SetState as u8 => Ok(Self {
+                addr: a,
+                cmd: MotorCmd::SetState,
+            }),
+
+            _ => Err(serial::ExtractionError),
+        }
+    }
+
+    fn get(&self) -> (u8, u8) {
+        (self.addr, self.cmd as u8)
+    }
+}
+
+/// Data being sent to a motor controller, differs based on the requirments of
+/// the command being sent.
+#[derive(Clone, Copy)]
+pub enum MotorData {
+    Speed(f32),
+    State(u32),
+}
+
+impl serial::Data for MotorData {
+    fn extract<T, U>(packet: &serial::Packet<T, U>) -> serial::ExtractionResult<MotorData>
+    where
+        T: serial::Header,
+        U: serial::Data,
+    {
+        let head = MotorHeader::extract(packet)?;
+
+        match head.cmd {
+            MotorCmd::SetSpeed => Ok(Self::Speed(f32::from_bits(packet.data.get()))),
+            MotorCmd::SetState => Ok(Self::State(packet.data.get())),
+        }
+    }
+
+    fn get(&self) -> u32 {
+        match self {
+            Self::Speed(v) => v.to_bits(),
+            Self::State(v) => *v,
         }
     }
 }
 
+/// Represents the command of a packet sent to the motor controller.
 #[repr(u8)]
-pub enum McCmd {
+#[derive(Clone, Copy)]
+pub enum MotorCmd {
+    /// Set the speed on of the motor.
     SetSpeed = 1u8,
+
+    /// Set the state of the motor.
+    SetState = 2u8,
 }
 
+/// An invalid speed was given to the motor.
 #[derive(Debug, Clone)]
 pub struct InvalidSpeedError;
 
