@@ -4,10 +4,7 @@
 
 use std::io;
 
-use crate::{
-    angle::Angle,
-    serial::{self, Header},
-};
+use crate::{angle::Angle, serial};
 
 /// Responsible for constructing requests for data from a gyro over the serial
 /// bus.
@@ -104,17 +101,14 @@ impl Controller {
         serv: &mut serial::Server,
         req: Request,
     ) -> io::Result<f32> {
-        let packet = serial::Packet::new(self.gen_header(req), serial::Data::UnsignedInteger(0u32));
+        let packet = serial::Packet::new(self.gen_header(req), 0u32);
 
-        let head = match client.send(packet) {
+        let head = match client.send(&packet) {
             Ok(h) => h,
             Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
         };
 
-        Ok(serv
-            .listen_for(head, serial::Data::FloatingPoint(0f32))
-            .await?
-            .into())
+        Ok(serv.listen_for::<GyroHeader, f32>(head).await?)
     }
 
     /// Sets the "zero" position of the gyro, all angle gotten after this will
@@ -168,7 +162,7 @@ impl Controller {
     fn gen_header(&self, cmd: Request) -> GyroHeader {
         GyroHeader {
             addr: self.addr,
-            cmd: cmd as u8,
+            cmd,
         }
     }
 }
@@ -176,6 +170,7 @@ impl Controller {
 /// Represents a request to the physical gyro, by its controller, for a specific
 /// piece of information.
 #[repr(u8)]
+#[derive(Clone, Copy)]
 pub enum Request {
     Yaw = 0b0000_0001u8,
     Roll = 0b0000_0010u8,
@@ -191,8 +186,54 @@ impl Request {
 }
 
 /// Represents packet headers used by the gyro.
-#[derive(Header, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct GyroHeader {
-    pub addr: u8,
-    pub cmd: u8,
+    pub(crate) addr: u8,
+    pub(crate) cmd: Request,
+}
+
+impl serial::Header for GyroHeader {
+    fn extract<T, U>(packet: &serial::Packet<T, U>) -> serial::ExtractionResult<Self>
+    where
+        T: serial::Header,
+        U: serial::Data,
+    {
+        match packet.head.get() {
+            (a, c) if c == Request::Yaw as u8 => Ok(Self {
+                addr: a,
+                cmd: Request::Yaw,
+            }),
+
+            (a, c) if c == Request::Roll as u8 => Ok(Self {
+                addr: a,
+                cmd: Request::Roll,
+            }),
+
+            (a, c) if c == Request::Pitch as u8 => Ok(Self {
+                addr: a,
+                cmd: Request::Pitch,
+            }),
+
+            (a, c) if c == Request::YawPerSec as u8 => Ok(Self {
+                addr: a,
+                cmd: Request::YawPerSec,
+            }),
+
+            (a, c) if c == Request::RollPerSec as u8 => Ok(Self {
+                addr: a,
+                cmd: Request::RollPerSec,
+            }),
+
+            (a, c) if c == Request::PitchPerSec as u8 => Ok(Self {
+                addr: a,
+                cmd: Request::PitchPerSec,
+            }),
+
+            _ => Err(serial::ExtractionError),
+        }
+    }
+
+    fn get(&self) -> (u8, u8) {
+        (self.addr, self.cmd as u8)
+    }
 }

@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use crate::serial::{self, Header};
+use crate::serial;
 
 /// Represents an LED light controller on the serial bus.
 pub struct Controller {
@@ -31,11 +31,14 @@ impl Controller {
     #[must_use]
     pub fn gen_packet(&mut self) -> serial::Packet<LedHeader, Color> {
         serial::Packet::new(
-            LedHeader::new(self.addr, LedCommand::Set),
-            serial::Data::UnsignedInteger(match self.color {
-                Some(mut c) => c.gen_u32(),
-                None => Color::from_rgb(0f32, 0f32, 0f32).gen_u32(),
-            }),
+            LedHeader {
+                addr: self.addr,
+                cmd: LedCommand::Set,
+            },
+            match self.color {
+                Some(v) => v,
+                None => Color::from_rgb(0f32, 0f32, 0f32),
+            },
         )
     }
 }
@@ -75,10 +78,22 @@ impl Color {
         }
     }
 
+    /// Creates a new `Color` from a `u32` in which the right most 8 bits are
+    /// the blue value, the next 8 are the green value, and the next 8 are the
+    /// red value.
+    #[must_use]
+    pub fn from_u32(n: u32) -> Self {
+        let r = ((n >> (u8::BITS * 2)) as u8) as f32 / 255f32;
+        let g = ((n >> u8::BITS) as u8) as f32 / 255f32;
+        let b = (n as u8) as f32 / 255f32;
+
+        Self::from_rgb(r, g, b)
+    }
+
     /// Gets the RGB representation of this color.
     #[inline]
     #[must_use]
-    pub fn rgb(&mut self) -> (f32, f32, f32) {
+    pub fn rgb(&self) -> (f32, f32, f32) {
         match self.rgb {
             Some(rgb) => rgb,
             None => match self.hsv {
@@ -92,7 +107,7 @@ impl Color {
     /// between 0 and 360.
     #[inline]
     #[must_use]
-    pub fn hsv(&mut self) -> (f32, f32, f32) {
+    pub fn hsv(&self) -> (f32, f32, f32) {
         match self.hsv {
             Some(hsv) => hsv,
             None => match self.rgb {
@@ -106,7 +121,7 @@ impl Color {
     /// between 0 and 255, the next 8 bits to the left would be the G value, and
     /// the R value is the left 8 bits.
     #[must_use]
-    pub fn gen_u32(&mut self) -> u32 {
+    pub fn gen_u32(&self) -> u32 {
         let (r, g, b) = self.rgb();
 
         0u32 | ((r * 255f32) as u32) << 2u32 * u8::BITS
@@ -117,7 +132,7 @@ impl Color {
     /// Calculates an RGB color truple given an HSV color tuple and caches it in
     /// `self`.
     #[must_use]
-    fn gen_rgb(&mut self, hsv: (f32, f32, f32)) -> (f32, f32, f32) {
+    fn gen_rgb(&self, hsv: (f32, f32, f32)) -> (f32, f32, f32) {
         let (mut h, s, v) = hsv;
 
         if s == 0f32 {
@@ -142,14 +157,13 @@ impl Color {
             _ => (v, p, q),
         };
 
-        self.rgb = Some(rgb);
         rgb
     }
 
     /// Calculates an HSV color truple given an rgb color tuple and caches it in
     /// `self`.
     #[must_use]
-    fn gen_hsv(&mut self, rgb: (f32, f32, f32)) -> (f32, f32, f32) {
+    fn gen_hsv(&self, rgb: (f32, f32, f32)) -> (f32, f32, f32) {
         let (r, g, b) = rgb;
 
         let max = r.max(g).max(b);
@@ -175,17 +189,17 @@ impl Color {
             }
         };
 
-        self.hsv = Some((h, s, max));
         (h, s, max)
     }
 }
 
 impl serial::Data for Color {
-    fn extract<T>(packet: &serial::Packet<T, u32>) -> Self
+    fn extract<T, U>(packet: &serial::Packet<T, U>) -> serial::ExtractionResult<Self>
     where
-        T: Header,
+        T: serial::Header,
+        U: serial::Data,
     {
-        todo!()
+        Ok(Self::from_u32(packet.data.get()))
     }
 
     fn get(&self) -> u32 {
@@ -194,26 +208,36 @@ impl serial::Data for Color {
 }
 
 /// Header for LED light serial packets.
-#[derive(Header, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct LedHeader {
-    pub addr: u8,
-    pub cmd: u8,
+    pub(crate) addr: u8,
+    pub(crate) cmd: LedCommand,
 }
 
-impl LedHeader {
-    /// Creates a new `LedHeader`.
-    #[inline]
-    #[must_use]
-    pub fn new(addr: u8, cmd: LedCommand) -> Self {
-        Self {
-            addr,
-            cmd: cmd as u8,
+impl serial::Header for LedHeader {
+    fn extract<T, U>(packet: &serial::Packet<T, U>) -> serial::ExtractionResult<Self>
+    where
+        T: serial::Header,
+        U: serial::Data,
+    {
+        match packet.head.get() {
+            (a, c) if c == LedCommand::Set as u8 => Ok(Self {
+                addr: a,
+                cmd: LedCommand::Set,
+            }),
+
+            _ => Err(serial::ExtractionError),
         }
+    }
+
+    fn get(&self) -> (u8, u8) {
+        (self.addr, self.cmd as u8)
     }
 }
 
 /// A command for an LED controller.
 #[repr(u8)]
+#[derive(Clone, Copy, Debug)]
 pub enum LedCommand {
     Set = 1u8,
 }

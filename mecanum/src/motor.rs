@@ -75,8 +75,11 @@ impl Controller {
         self.state = state;
 
         Some(serial::Packet::new(
-            MotorHeader::new(self.addr, MotorCmd::SetState),
-            self.state.into(),
+            MotorHeader {
+                addr: self.addr,
+                cmd: MotorCmd::SetState,
+            },
+            MotorData::State(self.state as u32),
         ))
     }
 
@@ -84,13 +87,17 @@ impl Controller {
     /// motor.
     #[must_use]
     pub fn gen_packet(&self) -> serial::Packet<MotorHeader, MotorData> {
-        serial::Packet::<MotorHeader>::new(
-            MotorHeader::new(self.addr, MotorCmd::SetSpeed),
-            serial::Data::FloatingPoint(self.speed),
+        serial::Packet::new(
+            MotorHeader {
+                addr: self.addr,
+                cmd: MotorCmd::SetSpeed,
+            },
+            MotorData::Speed(self.speed),
         )
     }
 }
 
+/// A motor controller state.
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
@@ -98,6 +105,41 @@ pub enum State {
     Disabled = 2u32,
 }
 
+/// Represents a serial packet header intended for a motr controller.
+#[derive(Clone, Copy)]
+pub struct MotorHeader {
+    pub(crate) addr: u8,
+    pub(crate) cmd: MotorCmd,
+}
+
+impl serial::Header for MotorHeader {
+    fn extract<T, U>(packet: &serial::Packet<T, U>) -> serial::ExtractionResult<Self>
+    where
+        T: serial::Header,
+        U: serial::Data,
+    {
+        match packet.head.get() {
+            (a, c) if c == MotorCmd::SetSpeed as u8 => Ok(Self {
+                addr: a,
+                cmd: MotorCmd::SetSpeed,
+            }),
+
+            (a, c) if c == MotorCmd::SetState as u8 => Ok(Self {
+                addr: a,
+                cmd: MotorCmd::SetState,
+            }),
+
+            _ => Err(serial::ExtractionError),
+        }
+    }
+
+    fn get(&self) -> (u8, u8) {
+        (self.addr, self.cmd as u8)
+    }
+}
+
+/// Data being sent to a motor controller, differs based on the requirments of
+/// the command being sent.
 #[derive(Clone, Copy)]
 pub enum MotorData {
     Speed(f32),
@@ -105,44 +147,31 @@ pub enum MotorData {
 }
 
 impl serial::Data for MotorData {
-    fn extract<T>(packet: &serial::Packet<T, u32>) -> Self
+    fn extract<T, U>(packet: &serial::Packet<T, U>) -> serial::ExtractionResult<MotorData>
     where
-        T: Header,
+        T: serial::Header,
+        U: serial::Data,
     {
-        let (_, cmd) = packet.head.get();
+        let head = MotorHeader::extract(packet)?;
 
-        match cmd {
-            MotorCmd::SetSpeed => Self::Speed(f32::from_bits(cmd)),
-            MotorCmd::SetState => Self::State(cmd),
+        match head.cmd {
+            MotorCmd::SetSpeed => Ok(Self::Speed(f32::from_bits(packet.data.get()))),
+            MotorCmd::SetState => Ok(Self::State(packet.data.get())),
         }
     }
 
     fn get(&self) -> u32 {
-        todo!()
-    }
-}
-
-impl Into<u32> for MotorData {
-    fn into(self) -> u32 {
         match self {
             Self::Speed(v) => v.to_bits(),
-            Self::State(v) => v,
+            Self::State(v) => *v,
         }
     }
 }
 
-#[derive(Header, Clone, Copy)]
-pub struct MotorHeader {
-    addr: u8,
-    cmd: u8,
-}
-
 /// Represents the command of a packet sent to the motor controller.
 #[repr(u8)]
+#[derive(Clone, Copy)]
 pub enum MotorCmd {
-    /// No command or invalid command.
-    None = 0u8,
-
     /// Set the speed on of the motor.
     SetSpeed = 1u8,
 
@@ -150,6 +179,7 @@ pub enum MotorCmd {
     SetState = 2u8,
 }
 
+/// An invalid speed was given to the motor.
 #[derive(Debug, Clone)]
 pub struct InvalidSpeedError;
 
