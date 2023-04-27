@@ -2,9 +2,12 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use gpio::GpioOut;
+use gpio::{
+    sysfs::{SysFsGpioInput, SysFsGpioOutput},
+    GpioIn, GpioOut,
+};
 use mecanum::serial;
-use std::{error::Error, fmt::Display, time};
+use std::{error::Error, fmt::Display, io, time};
 
 /// Checks an `Option<time::Instant>`, if its a `Some` variant then its value is
 /// returned, otherwise if its variant is `None` then `time::Instant::now()` is
@@ -20,57 +23,32 @@ macro_rules! now_if_none {
 
 /// Manages the running of a `Bot` implementation and keeps track of robot
 /// state, serial, controllers, etc.
-pub struct BotRunner<T, U>
+pub struct BotRunner<T, U, V>
 where
-    T: Bot<U>,
+    T: Bot,
     U: GpioOut,
+    V: GpioIn,
 {
     state: State,
     gilrs: gilrs::Gilrs,
     events: Vec<gilrs::Event>,
     relay: U,
     serial_tx: serial::Client,
-    serial_rx: serial::Server,
+    serial_rx: serial::Server<V>,
     bot: T,
 }
 
-impl<T, U> BotRunner<T, U>
+impl<T, U, V> BotRunner<T, U, V>
 where
-    T: Bot<U>,
+    T: Bot,
     U: GpioOut,
+    V: GpioIn,
 {
-    /// Creates a new `BotRunner` for running the given `Bot` implementation.
-    /// The returned instance will have the state `State::Disabled` with a value
-    /// of the time it was created.
-    #[must_use]
-    pub fn new(bot: T, cycle: Duration) -> Result<Self, U::Error> {
-        let mut gilrs = gilrs::Gilrs::new().unwrap();
-        let mut events = Vec::new();
-
-        while let Some(e) = gilrs.next_event() {
-            events.push(e);
-        }
-
-        Ok(Self {
-            state: State::Disabled(Some(time::Instant::now())),
-            gilrs,
-            events,
-            relay: T::open_pin(T::RELAY_PIN)?,
-            serial_tx: serial::Client::new(
-                T::open_pin(T::TX_CLOCK),
-                T::open_pin(T::TX_DATA),
-                cycle,
-            ),
-            serial_rx: serial::Server::new(T::open_pin(T::RX_CLOCK), T::open_pin(T::RX_DATA)),
-            bot,
-        })
-    }
-
     /// Starts a loop calling `BotRunner::run()`.
     #[inline]
     pub fn start(&mut self) {
         loop {
-            self.run()
+            self.run();
         }
     }
 
@@ -136,12 +114,44 @@ where
     }
 }
 
+impl<T> BotRunner<T, SysFsGpioOutput, SysFsGpioInput>
+where
+    T: Bot,
+{
+    /// Creates a new `BotRunner` for running the given `Bot` implementation.
+    /// The returned instance will have the state `State::Disabled` with a value
+    /// of the time it was created.
+    #[must_use]
+    pub fn new(bot: T, cycle: time::Duration) -> io::Result<Self> {
+        let mut gilrs = gilrs::Gilrs::new().unwrap();
+        let mut events = Vec::new();
+
+        while let Some(e) = gilrs.next_event() {
+            events.push(e);
+        }
+
+        Ok(Self {
+            state: State::Disabled(Some(time::Instant::now())),
+            gilrs,
+            events,
+            relay: SysFsGpioOutput::open(T::RELAY_PIN)?,
+            serial_tx: serial::Client::new(
+                SysFsGpioOutput::open(T::TX_CLOCK)?,
+                SysFsGpioOutput::open(T::TX_DATA)?,
+                cycle,
+            ),
+            serial_rx: serial::Server::new(
+                SysFsGpioInput::open(T::RX_CLOCK)?,
+                SysFsGpioInput::open(T::RX_DATA)?,
+            ),
+            bot,
+        })
+    }
+}
+
 /// Represents the custom struct that holds the custom code for running a bot.
 /// All default implementations of function simply do nothing.
-pub trait Bot<T>
-where
-    T: GpioOut,
-{
+pub trait Bot {
     /// Clock pin for transmitting serial data.
     const TX_CLOCK: u16;
 
@@ -156,9 +166,6 @@ where
 
     /// Pin to the relay with controll over device power.
     const RELAY_PIN: u16;
-
-    /// Open a pin of whatever type this `Bot` utilises.
-    fn open_pin(n: u16) -> Result<T, T::Error>;
 
     /// Always runs except in an emergency state, should manage simple things
     /// like LED lights or cameras that dont cause a danger or potential harm
@@ -255,5 +262,18 @@ impl Error for BotError {}
 impl Display for BotError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "error occured running bot")
+    }
+}
+
+pub type BotGpioResult<T> = Result<T, BotGpioError>;
+
+#[derive(Clone, Copy, Debug)]
+pub struct BotGpioError;
+
+impl Error for BotGpioError {}
+
+impl Display for BotGpioError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "error instantiating or utilising GP I/O from `Bot`")
     }
 }
