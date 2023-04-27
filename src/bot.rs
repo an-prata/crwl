@@ -185,6 +185,11 @@ pub trait Bot {
     ///
     /// * `time` - The time that the current `State` was set.
     /// * `events` - Gilrs controller events used for controller input.
+    ///
+    /// # Returns
+    ///
+    /// Should return a `State` holding the time passed into the function. An
+    /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
     fn run_enabled(&mut self, time: time::Instant, events: &[gilrs::Event]) -> BotResult<State> {
         Ok(State::Enabled(Some(time)))
@@ -195,6 +200,11 @@ pub trait Bot {
     /// # Arguments
     ///
     /// * `time` - The time that the current `State` was set.
+    ///
+    /// # Returns
+    ///
+    /// Should return a `State` holding the time passed into the function. An
+    /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
     fn run_idling(&mut self, time: time::Instant) -> BotResult<State> {
         Ok(State::Idling(Some(time)))
@@ -205,6 +215,11 @@ pub trait Bot {
     /// # Arguments
     ///
     /// * `time` - The time that the current `State` was set.
+    ///
+    /// # Returns
+    ///
+    /// Should return a `State` holding the time passed into the function. An
+    /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
     fn run_disabled(&mut self, time: time::Instant) -> BotResult<State> {
         Ok(State::Disabled(Some(time)))
@@ -216,6 +231,11 @@ pub trait Bot {
     /// # Arguments
     ///
     /// * `time` - The time that the current `State` was set.
+    ///
+    /// # Returns
+    ///
+    /// Should return a `State` holding the time passed into the function. An
+    /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
     fn run_emergency(&mut self, time: time::Instant) -> BotResult<State> {
         Ok(State::Emergency(Some(time)))
