@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use std::io;
+use std::{error::Error, fmt::Display};
 
 use gpio::GpioIn;
 
@@ -66,7 +66,7 @@ impl Controller {
         &mut self,
         client: &mut serial::Client,
         serv: &mut serial::Server<T>,
-    ) -> io::Result<()>
+    ) -> RequestResult<()>
     where
         T: GpioIn,
     {
@@ -105,7 +105,7 @@ impl Controller {
         client: &mut serial::Client,
         serv: &mut serial::Server<T>,
         req: Request,
-    ) -> io::Result<f32>
+    ) -> RequestResult<f32>
     where
         T: GpioIn,
     {
@@ -113,10 +113,13 @@ impl Controller {
 
         let head = match client.send(packet) {
             Ok(h) => h,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
+            Err(_) => return Err(RequestError),
         };
 
-        Ok(serv.listen_for::<GyroHeader, f32>(head).await?)
+        match serv.listen_for::<GyroHeader, f32>(head).await {
+            Ok(n) => Ok(n),
+            Err(_) => Err(RequestError),
+        }
     }
 
     /// Sets the "zero" position of the gyro, all angle gotten after this will
@@ -172,6 +175,19 @@ impl Controller {
             addr: self.addr,
             cmd,
         }
+    }
+}
+
+pub type RequestResult<T> = Result<T, RequestError>;
+
+#[derive(Clone, Copy, Debug)]
+pub struct RequestError;
+
+impl Error for RequestError {}
+
+impl Display for RequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "failed requesting or receiving a requested packet")
     }
 }
 
