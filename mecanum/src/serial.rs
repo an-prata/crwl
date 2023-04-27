@@ -25,8 +25,8 @@ impl Client {
     /// Creates a new `Client` given already opened `GpioOut` implementations.
     pub fn new<T>(clock: T, data: T, cycle: Duration) -> Self
     where
-        T: GpioOut + Send,
-        <T as GpioOut>::Error: Send,
+        T: GpioOut + Send + 'static,
+        <T as GpioOut>::Error: Send + 'static,
     {
         // Kept outside the thread so we can return the error before spawning.
         let mut sender = BitSender::new(clock, data, cycle);
@@ -85,13 +85,20 @@ pub struct Server<T>
 where
     T: GpioIn,
 {
-    reciever: BitReceiver<T>,
+    receiver: BitReceiver<T>,
 }
 
 impl<T> Server<T>
 where
     T: GpioIn,
 {
+    /// Creates a new `Server` given already opened `GpioIn` implementations.
+    pub fn new(clock: T, data: T) -> Self {
+        Self {
+            receiver: BitReceiver::new(clock, data),
+        }
+    }
+
     /// Listens for a packet with the given head and returns its data. Since all
     /// recieved data is gotten by request any packet with a different header is
     /// an error. Will block the current thread until the packet is recieved.
@@ -101,12 +108,12 @@ where
     /// * `head` - Packet head to listen for.
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
-    pub async fn listen_for<U, V>(&mut self, head: U) -> SerialListenResult<V>
+    pub async fn listen_for<U, V>(&mut self, head: U) -> ListenResult<V>
     where
         U: Header,
         V: Data,
     {
-        let recieved_packet = match self.reciever.recv(Packet::<(u8, u8), u32>::BITS as u8) {
+        let recieved_packet = match self.receiver.recv(Packet::<(u8, u8), u32>::BITS as u8) {
             Ok(packet) => match packet {
                 Some((v, _)) => {
                     let addr = (v >> (u8::BITS + u32::BITS)) as u8;
@@ -116,21 +123,21 @@ where
                     Packet::new((addr, cmd), data)
                 }
 
-                None => return Err(SerialListenError),
+                None => return Err(ListenError),
             },
 
-            Err(_) => return Err(SerialListenError),
+            Err(_) => return Err(ListenError),
         };
 
         // Since all recived data is made by request we should be recieving
         // exactly the listened for header, anything else is an error.
         if recieved_packet.head.get() != head.get() {
-            return Err(SerialListenError);
+            return Err(ListenError);
         }
 
         match V::extract(&recieved_packet) {
             Ok(v) => Ok(v),
-            Err(_) => Err(SerialListenError),
+            Err(_) => Err(ListenError),
         }
     }
 
@@ -142,7 +149,7 @@ where
     /// * `heads` - A slice of `Header`s in the order the are expect to come.
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
-    pub async fn listen_for_seq<U, V>(&mut self, heads: &[U]) -> SerialListenResult<Vec<V>>
+    pub async fn listen_for_seq<U, V>(&mut self, heads: &[U]) -> ListenResult<Vec<V>>
     where
         U: Header,
         V: Data,
@@ -157,19 +164,6 @@ where
     }
 }
 
-pub type SerialListenResult<T> = Result<T, SerialListenError>;
-
-#[derive(Clone, Copy, Debug)]
-pub struct SerialListenError;
-
-impl Error for SerialListenError {}
-
-impl Display for SerialListenError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to receive, parse, or extract packet information")
-    }
-}
-
 impl Server<SysFsGpioInput> {
     /// Instantiants a new `Server` given the clock and data pins of the serial
     /// bus to read from.
@@ -177,8 +171,21 @@ impl Server<SysFsGpioInput> {
     #[must_use]
     pub fn open(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
         Ok(Self {
-            reciever: BitReceiver::<SysFsGpioInput>::open(clock_pin, data_pin)?,
+            receiver: BitReceiver::<SysFsGpioInput>::open(clock_pin, data_pin)?,
         })
+    }
+}
+
+pub type ListenResult<T> = Result<T, ListenError>;
+
+#[derive(Clone, Copy, Debug)]
+pub struct ListenError;
+
+impl Error for ListenError {}
+
+impl Display for ListenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to receive, parse, or extract packet information")
     }
 }
 
@@ -648,9 +655,9 @@ mod tests {
                     v
                 };
 
-                let mut reciever = BitReceiver::<DummyGpioIn<&dyn Fn() -> GpioValue>>::new(
-                    &clock_read,
-                    &data_read,
+                let mut reciever = BitReceiver::new(
+                    DummyGpioIn::new(&clock_read as &dyn Fn() -> GpioValue),
+                    DummyGpioIn::new(&data_read as &dyn Fn() -> GpioValue),
                 );
 
                 let mut packets: Vec<Packet<(u8, u8), u32>> = Vec::new();
@@ -684,9 +691,9 @@ mod tests {
         // Two milliseconds could be a bit fast for some hardware, but even one
         // millisecond works for me so I'll leave it for now to speed up unit
         // test runs.
-        let mut sender = BitSender::<DummyGpioOut<&dyn Fn(GpioValue)>>::new(
-            &clock_set,
-            &data_set,
+        let mut sender = BitSender::new(
+            DummyGpioOut::new(&clock_set as &dyn Fn(GpioValue)),
+            DummyGpioOut::new(&data_set as &dyn Fn(GpioValue)),
             Duration::from_millis(2),
         );
 
@@ -703,35 +710,6 @@ mod tests {
 
         for i in 0..packets.len() {
             assert_eq!(packets[i].get(), read_packets[i].get());
-        }
-    }
-
-    impl<'a> BitSender<DummyGpioOut<&'a dyn Fn(GpioValue)>> {
-        /// Creates a new dummy `BitSender` for unit testing.
-        #[inline]
-        #[must_use]
-        fn new(
-            clock_fn: &'a dyn Fn(GpioValue),
-            data_fn: &'a dyn Fn(GpioValue),
-            clock_cycle: Duration,
-        ) -> Self {
-            Self {
-                clock: DummyGpioOut::new(clock_fn),
-                data: DummyGpioOut::new(data_fn),
-                cycle: clock_cycle,
-            }
-        }
-    }
-
-    impl<'a> BitReceiver<DummyGpioIn<&'a dyn Fn() -> GpioValue>> {
-        /// Creates a new dummy `BitReciever` for unit testing.
-        #[inline]
-        #[must_use]
-        fn new(clock: &'a dyn Fn() -> GpioValue, data: &'a dyn Fn() -> GpioValue) -> Self {
-            Self {
-                clock: DummyGpioIn::new(clock),
-                data: DummyGpioIn::new(data),
-            }
         }
     }
 }
