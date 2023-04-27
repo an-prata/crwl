@@ -64,7 +64,7 @@ where
         // but i also love how absolutely stupid this is while also being kinda
         // awesome at the same time.
 
-        match || -> BotResult<()> {
+        match || -> BotResult<State> {
             Ok(match self.state {
                 State::Enabled(t) => {
                     self.events.clear();
@@ -76,25 +76,23 @@ where
 
                     self.bot.run_base(self.state)?;
                     self.bot
-                        .run_enabled(now_if_none!(t), self.events.as_slice())?;
+                        .run_enabled(now_if_none!(t), self.events.as_slice())?
                 }
 
                 State::Idling(t) => {
                     self.bot.run_base(self.state)?;
-                    self.bot.run_idling(now_if_none!(t))?;
+                    self.bot.run_idling(now_if_none!(t))?
                 }
 
                 State::Disabled(t) => {
                     self.bot.run_base(self.state)?;
-                    self.bot.run_disabled(now_if_none!(t))?;
+                    self.bot.run_disabled(now_if_none!(t))?
                 }
 
-                State::Emergency(t) => {
-                    self.bot.run_emergency(now_if_none!(t))?;
-                }
+                State::Emergency(t) => self.bot.run_emergency(now_if_none!(t))?,
             })
         }() {
-            Ok(_) => (),
+            Ok(s) => self.state = s,
             Err(_) => {
                 self.state = State::Emergency(Some(time::Instant::now()));
             }
@@ -188,8 +186,8 @@ pub trait Bot {
     /// * `time` - The time that the current `State` was set.
     /// * `events` - Gilrs controller events used for controller input.
     #[allow(unused_variables)]
-    fn run_enabled(&mut self, time: time::Instant, events: &[gilrs::Event]) -> BotResult<()> {
-        Ok(())
+    fn run_enabled(&mut self, time: time::Instant, events: &[gilrs::Event]) -> BotResult<State> {
+        Ok(State::Enabled(Some(time)))
     }
 
     /// Can operate any component of the robot but without controller input.
@@ -198,8 +196,8 @@ pub trait Bot {
     ///
     /// * `time` - The time that the current `State` was set.
     #[allow(unused_variables)]
-    fn run_idling(&mut self, time: time::Instant) -> BotResult<()> {
-        Ok(())
+    fn run_idling(&mut self, time: time::Instant) -> BotResult<State> {
+        Ok(State::Idling(Some(time)))
     }
 
     /// May not operate physically moving devices.
@@ -208,8 +206,8 @@ pub trait Bot {
     ///
     /// * `time` - The time that the current `State` was set.
     #[allow(unused_variables)]
-    fn run_disabled(&mut self, time: time::Instant) -> BotResult<()> {
-        Ok(())
+    fn run_disabled(&mut self, time: time::Instant) -> BotResult<State> {
+        Ok(State::Disabled(Some(time)))
     }
 
     /// Run as little as possible, this mode is only used if something has gone
@@ -219,8 +217,8 @@ pub trait Bot {
     ///
     /// * `time` - The time that the current `State` was set.
     #[allow(unused_variables)]
-    fn run_emergency(&mut self, time: time::Instant) -> BotResult<()> {
-        Ok(())
+    fn run_emergency(&mut self, time: time::Instant) -> BotResult<State> {
+        Ok(State::Emergency(Some(time)))
     }
 }
 
@@ -265,8 +263,12 @@ impl Display for BotError {
     }
 }
 
+/// Represents a GP I/O result that can occure for I/O operations related to a
+/// `Bot` implementation or the `BotRunner`.
 pub type BotGpioResult<T> = Result<T, BotGpioError>;
 
+/// Represents a GP I/O error that can occure for I/O operations related to a
+/// `Bot` implementation or the `BotRunner`.
 #[derive(Clone, Copy, Debug)]
 pub struct BotGpioError;
 
