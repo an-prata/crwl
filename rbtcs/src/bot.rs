@@ -2,12 +2,16 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
+use crate::serial;
 use gpio::{
     sysfs::{SysFsGpioInput, SysFsGpioOutput},
     GpioIn, GpioOut,
 };
-use mecanum::serial;
-use std::{error::Error, fmt::Display, io, time};
+use std::{
+    error::Error,
+    fmt::{Debug, Display},
+    io, time,
+};
 
 /// Checks an `Option<time::Instant>`, if its a `Some` variant then its value is
 /// returned, otherwise if its variant is `None` then `time::Instant::now()` is
@@ -28,6 +32,8 @@ where
     T: Bot,
     U: GpioOut,
     V: GpioIn,
+    <U as GpioOut>::Error: Debug,
+    <V as GpioIn>::Error: Debug,
 {
     state: State,
     gilrs: gilrs::Gilrs,
@@ -43,6 +49,8 @@ where
     T: Bot,
     U: GpioOut,
     V: GpioIn,
+    <U as GpioOut>::Error: Debug,
+    <V as GpioIn>::Error: Debug,
 {
     /// Starts a loop calling `BotRunner::run()`.
     #[inline]
@@ -74,26 +82,58 @@ where
                         self.events.push(e);
                     }
 
-                    self.bot.run_base(self.state)?;
+                    self.relay
+                        .set_high()
+                        .expect("relay pin should not fail to set ");
                     self.bot
-                        .run_enabled(now_if_none!(t), self.events.as_slice())?
+                        .run_base(self.state, &mut self.serial_tx, &mut self.serial_rx)?;
+                    self.bot.run_enabled(
+                        now_if_none!(t),
+                        self.events.as_slice(),
+                        &mut self.serial_tx,
+                        &mut self.serial_rx,
+                    )?
                 }
 
                 State::Idling(t) => {
-                    self.bot.run_base(self.state)?;
-                    self.bot.run_idling(now_if_none!(t))?
+                    self.relay
+                        .set_high()
+                        .expect("relay pin should not fail to set ");
+                    self.bot
+                        .run_base(self.state, &mut self.serial_tx, &mut self.serial_rx)?;
+                    self.bot.run_idling(
+                        now_if_none!(t),
+                        &mut self.serial_tx,
+                        &mut self.serial_rx,
+                    )?
                 }
 
                 State::Disabled(t) => {
-                    self.bot.run_base(self.state)?;
-                    self.bot.run_disabled(now_if_none!(t))?
+                    self.relay
+                        .set_high()
+                        .expect("relay pin should not fail to set ");
+                    self.bot
+                        .run_base(self.state, &mut self.serial_tx, &mut self.serial_rx)?;
+                    self.bot.run_disabled(
+                        now_if_none!(t),
+                        &mut self.serial_tx,
+                        &mut self.serial_rx,
+                    )?
                 }
 
-                State::Emergency(t) => self.bot.run_emergency(now_if_none!(t))?,
+                State::Emergency(t) => {
+                    self.relay
+                        .set_low()
+                        .expect("relay pin should not fail to set ");
+                    self.bot.run_emergency(now_if_none!(t))?
+                }
             })
         }() {
             Ok(s) => self.state = s,
             Err(_) => {
+                self.relay
+                    .set_low()
+                    .expect("relay pin should not fail to set ");
                 self.state = State::Emergency(Some(time::Instant::now()));
             }
         };
@@ -162,7 +202,9 @@ pub trait Bot {
     /// Data pin for receiving serial data.
     const RX_DATA: u16;
 
-    /// Pin to the relay with controll over device power.
+    /// Pin to the relay with control over device power. Since this is a safety
+    /// measure when the pin is low it should disallow power to the devices, for
+    /// the same reason if this pin ever fails to set the program will panic.
     const RELAY_PIN: u16;
 
     /// Always runs except in an emergency state, should manage simple things
@@ -173,8 +215,18 @@ pub trait Bot {
     ///
     /// * `state` - The `Bot`'s current state with a value of the time that
     /// state was set.
+    /// * `serial_tx` - `serial::Client` for sending serial data.
+    /// * `serial_rx` - `serial::Server<T>` for receiving serial data.
     #[allow(unused_variables)]
-    fn run_base(&mut self, state: State) -> BotResult<()> {
+    fn run_base<T>(
+        &mut self,
+        state: State,
+        serial_tx: &mut serial::Client,
+        serial_rx: &mut serial::Server<T>,
+    ) -> BotResult<()>
+    where
+        T: GpioIn,
+    {
         Ok(())
     }
 
@@ -185,13 +237,24 @@ pub trait Bot {
     ///
     /// * `time` - The time that the current `State` was set.
     /// * `events` - Gilrs controller events used for controller input.
+    /// * `serial_tx` - `serial::Client` for sending serial data.
+    /// * `serial_rx` - `serial::Server<T>` for receiving serial data.
     ///
     /// # Returns
     ///
     /// Should return a `State` holding the time passed into the function. An
     /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
-    fn run_enabled(&mut self, time: time::Instant, events: &[gilrs::Event]) -> BotResult<State> {
+    fn run_enabled<T>(
+        &mut self,
+        time: time::Instant,
+        events: &[gilrs::Event],
+        serial_tx: &mut serial::Client,
+        serial_rx: &mut serial::Server<T>,
+    ) -> BotResult<State>
+    where
+        T: GpioIn,
+    {
         Ok(State::Enabled(Some(time)))
     }
 
@@ -200,13 +263,23 @@ pub trait Bot {
     /// # Arguments
     ///
     /// * `time` - The time that the current `State` was set.
+    /// * `serial_tx` - `serial::Client` for sending serial data.
+    /// * `serial_rx` - `serial::Server<T>` for receiving serial data.
     ///
     /// # Returns
     ///
     /// Should return a `State` holding the time passed into the function. An
     /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
-    fn run_idling(&mut self, time: time::Instant) -> BotResult<State> {
+    fn run_idling<T>(
+        &mut self,
+        time: time::Instant,
+        serial_tx: &mut serial::Client,
+        serial_rx: &mut serial::Server<T>,
+    ) -> BotResult<State>
+    where
+        T: GpioIn,
+    {
         Ok(State::Idling(Some(time)))
     }
 
@@ -215,13 +288,23 @@ pub trait Bot {
     /// # Arguments
     ///
     /// * `time` - The time that the current `State` was set.
+    /// * `serial_tx` - `serial::Client` for sending serial data.
+    /// * `serial_rx` - `serial::Server<T>` for receiving serial data.
     ///
     /// # Returns
     ///
     /// Should return a `State` holding the time passed into the function. An
     /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
-    fn run_disabled(&mut self, time: time::Instant) -> BotResult<State> {
+    fn run_disabled<T>(
+        &mut self,
+        time: time::Instant,
+        serial_tx: &mut serial::Client,
+        serial_rx: &mut serial::Server<T>,
+    ) -> BotResult<State>
+    where
+        T: GpioIn,
+    {
         Ok(State::Disabled(Some(time)))
     }
 

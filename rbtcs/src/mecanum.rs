@@ -2,14 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-pub mod angle;
-pub mod gyro;
-pub mod headless;
-pub mod led_lights;
-pub mod motor;
-pub mod serial;
-
-use angle::Angle;
+use crate::angle::Angle;
 use aprox_eq::AproxEq;
 use std::f64;
 
@@ -143,7 +136,7 @@ pub fn calc_4_axes_drive(x: f64, y: f64, rotation: f64, speed: f64) -> (DriveVec
 
 #[cfg(test)]
 mod tests {
-    use crate::{DriveState, DriveVector};
+    use super::{DriveState, DriveVector};
     use aprox_eq::assert_aprox_eq;
 
     #[test]
@@ -151,8 +144,8 @@ mod tests {
         let mut x: f64 = 0f64;
 
         while x <= 1f64 {
-            let (vec3, state3) = crate::calc_3_axes_drive(0f64, x, 0f64);
-            let (vec4, state4) = crate::calc_4_axes_drive(0f64, x, 0f64, x);
+            let (vec3, state3) = super::calc_3_axes_drive(0f64, x, 0f64);
+            let (vec4, state4) = super::calc_4_axes_drive(0f64, x, 0f64, x);
 
             assert_aprox_eq!(state3.fr, state3.fl);
             assert_aprox_eq!(state3.br, state3.bl);
@@ -166,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn never_exceeds_zero() {
+    fn never_exceeds_one() {
         let mut x = -1f64;
 
         while x <= 1f64 {

@@ -388,7 +388,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use mecanum::serial;
+    /// use rbtcs::serial;
     ///
     /// let packet = serial::Packet::new((1u8, 42u8), 255u32);
     /// let serial_data: serial::SerialData = packet.into();
@@ -424,7 +424,7 @@ where
     ///
     /// ```
     /// use std::f32;
-    /// use mecanum::serial;
+    /// use rbtcs::serial;
     ///
     /// let packet = serial::Packet::new((1u8, 42u8), f32::consts::PI.to_bits());
     /// let serial_data: serial::SerialData = packet.into();

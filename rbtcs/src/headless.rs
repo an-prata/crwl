@@ -2,7 +2,10 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use crate::{angle::Angle, DriveState, DriveVector};
+use crate::{
+    angle::Angle,
+    mecanum::{DriveState, DriveVector},
+};
 
 /// Represents a drive mode, namely the drive's frame of reference for controls.
 #[derive(Debug)]

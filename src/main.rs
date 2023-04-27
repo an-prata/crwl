@@ -2,10 +2,9 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-mod bot;
 mod log;
 use gilrs::{Axis, Button, EventType, Gilrs};
-use mecanum::{angle::Angle, gyro, headless::DriveMode, motor, serial, DriveState, DriveVector};
+use rbtcs::{angle::Angle, gyro, headless::DriveMode, motor, serial, DriveState, DriveVector};
 use std::{error::Error, time::Duration};
 
 const CLIENT_CLOCK_PIN: u16 = 0u16;
