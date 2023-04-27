@@ -4,6 +4,8 @@
 
 use std::io;
 
+use gpio::GpioIn;
+
 use crate::{angle::Angle, serial};
 
 /// Responsible for constructing requests for data from a gyro over the serial
@@ -60,11 +62,14 @@ impl Controller {
 
     /// Updates all this structs values. This will block the current thread
     /// until completion.
-    pub async fn update(
+    pub async fn update<T>(
         &mut self,
         client: &mut serial::Client,
-        serv: &mut serial::Server,
-    ) -> io::Result<()> {
+        serv: &mut serial::Server<T>,
+    ) -> io::Result<()>
+    where
+        T: GpioIn,
+    {
         self.yaw = Some(Angle::from_radians(
             self.request(client, serv, Request::Yaw).await? as f64,
         ));
@@ -95,12 +100,15 @@ impl Controller {
     /// Manually requests a newly updated value from the gyro, this will block
     /// the current thread until the request in fulfilled, though it should be
     /// fairly quick.
-    pub async fn request(
+    pub async fn request<T>(
         &mut self,
         client: &mut serial::Client,
-        serv: &mut serial::Server,
+        serv: &mut serial::Server<T>,
         req: Request,
-    ) -> io::Result<f32> {
+    ) -> io::Result<f32>
+    where
+        T: GpioIn,
+    {
         let packet = serial::Packet::new(self.gen_header(req), 0u32);
 
         let head = match client.send(packet) {

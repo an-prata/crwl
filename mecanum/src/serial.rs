@@ -9,6 +9,7 @@ use gpio::{
 };
 use std::{
     error::Error,
+    fmt::Display,
     io, mem,
     sync::mpsc::{self, SendError, Sender},
     thread,
@@ -21,15 +22,17 @@ pub struct Client {
 }
 
 impl Client {
-    /// Creates a new serial client given the clock and data pins to use as a
-    /// serial bus.
-    #[must_use]
-    pub fn new(clock_pin: u16, data_pin: u16, clock_cycle: Duration) -> io::Result<Self> {
+    /// Creates a new `Client` given already opened `GpioOut` implementations.
+    pub fn new<T>(clock: T, data: T, cycle: Duration) -> Self
+    where
+        T: GpioOut + Send,
+        <T as GpioOut>::Error: Send,
+    {
         // Kept outside the thread so we can return the error before spawning.
-        let mut sender = BitSender::<SysFsGpioOutput>::new(clock_pin, data_pin, clock_cycle)?;
+        let mut sender = BitSender::new(clock, data, cycle);
         let (tx, rx) = mpsc::channel();
 
-        thread::spawn(move || -> io::Result<()> {
+        thread::spawn(move || -> Result<(), T::Error> {
             loop {
                 let packet: SerialData = match rx.recv() {
                     Ok(p) => p,
@@ -45,7 +48,18 @@ impl Client {
             }
         });
 
-        Ok(Self { tx })
+        Self { tx }
+    }
+
+    /// Creates a new serial client given the clock and data pins to use as a
+    /// serial bus.
+    #[must_use]
+    pub fn open(clock_pin: u16, data_pin: u16, clock_cycle: Duration) -> io::Result<Self> {
+        Ok(Client::new(
+            SysFsGpioOutput::open(clock_pin)?,
+            SysFsGpioOutput::open(data_pin)?,
+            clock_cycle,
+        ))
     }
 
     /// Queues a packet for sending on the client thread. Returns the given
@@ -56,10 +70,10 @@ impl Client {
     /// serial, only that it was successfully sent to the thread for that
     /// purpose.
     #[inline]
-    pub fn send<T, U>(&mut self, packet: Packet<T, U>) -> Result<T, SendError<SerialData>>
+    pub fn send<U, V>(&mut self, packet: Packet<U, V>) -> Result<U, SendError<SerialData>>
     where
-        T: Header,
-        U: Data,
+        U: Header,
+        V: Data,
     {
         self.tx.send(packet.into())?;
         Ok(packet.head)
@@ -67,21 +81,17 @@ impl Client {
 }
 
 /// Responsible for recieving messages from the serial bus.
-pub struct Server {
-    reciever: BitReciever<SysFsGpioInput>,
+pub struct Server<T>
+where
+    T: GpioIn,
+{
+    reciever: BitReceiver<T>,
 }
 
-impl Server {
-    /// Instantiants a new `Server` given the clock and data pins of the serial
-    /// bus to read from.
-    #[inline]
-    #[must_use]
-    pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
-        Ok(Self {
-            reciever: BitReciever::<SysFsGpioInput>::new(clock_pin, data_pin)?,
-        })
-    }
-
+impl<T> Server<T>
+where
+    T: GpioIn,
+{
     /// Listens for a packet with the given head and returns its data. Since all
     /// recieved data is gotten by request any packet with a different header is
     /// an error. Will block the current thread until the packet is recieved.
@@ -91,42 +101,36 @@ impl Server {
     /// * `head` - Packet head to listen for.
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
-    pub async fn listen_for<T, U>(&mut self, head: T) -> io::Result<U>
+    pub async fn listen_for<U, V>(&mut self, head: U) -> SerialListenResult<V>
     where
-        T: Header,
-        U: Data,
+        U: Header,
+        V: Data,
     {
-        let recieved_packet = match self.reciever.recv(Packet::<(u8, u8), u32>::BITS as u8)? {
-            Some((v, _)) => {
-                let addr = (v >> (u8::BITS + u32::BITS)) as u8;
-                let cmd = (v >> u32::BITS) as u8;
-                let data = v as u32;
+        let recieved_packet = match self.reciever.recv(Packet::<(u8, u8), u32>::BITS as u8) {
+            Ok(packet) => match packet {
+                Some((v, _)) => {
+                    let addr = (v >> (u8::BITS + u32::BITS)) as u8;
+                    let cmd = (v >> u32::BITS) as u8;
+                    let data = v as u32;
 
-                Packet::new((addr, cmd), data)
-            }
-            None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "could not recieve packet",
-                ))
-            }
+                    Packet::new((addr, cmd), data)
+                }
+
+                None => return Err(SerialListenError),
+            },
+
+            Err(_) => return Err(SerialListenError),
         };
 
         // Since all recived data is made by request we should be recieving
         // exactly the listened for header, anything else is an error.
         if recieved_packet.head.get() != head.get() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "recieved header did not match one provided",
-            ));
+            return Err(SerialListenError);
         }
 
-        match U::extract(&recieved_packet) {
+        match V::extract(&recieved_packet) {
             Ok(v) => Ok(v),
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "could not extract data from packet",
-            )),
+            Err(_) => Err(SerialListenError),
         }
     }
 
@@ -138,18 +142,43 @@ impl Server {
     /// * `heads` - A slice of `Header`s in the order the are expect to come.
     /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
-    pub async fn listen_for_seq<T, U>(&mut self, heads: &[T]) -> io::Result<Vec<U>>
+    pub async fn listen_for_seq<U, V>(&mut self, heads: &[U]) -> SerialListenResult<Vec<V>>
     where
-        T: Header,
-        U: Data,
+        U: Header,
+        V: Data,
     {
-        let mut data: Vec<U> = Vec::new();
+        let mut data: Vec<V> = Vec::new();
 
         for h in heads {
-            data.push(self.listen_for::<T, U>(*h).await?);
+            data.push(self.listen_for::<U, V>(*h).await?);
         }
 
         Ok(data)
+    }
+}
+
+pub type SerialListenResult<T> = Result<T, SerialListenError>;
+
+#[derive(Clone, Copy, Debug)]
+pub struct SerialListenError;
+
+impl Error for SerialListenError {}
+
+impl Display for SerialListenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to receive, parse, or extract packet information")
+    }
+}
+
+impl Server<SysFsGpioInput> {
+    /// Instantiants a new `Server` given the clock and data pins of the serial
+    /// bus to read from.
+    #[inline]
+    #[must_use]
+    pub fn open(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
+        Ok(Self {
+            reciever: BitReceiver::<SysFsGpioInput>::open(clock_pin, data_pin)?,
+        })
     }
 }
 
@@ -169,6 +198,11 @@ struct BitSender<T: GpioOut> {
 }
 
 impl<T: GpioOut> BitSender<T> {
+    /// Creates a new `BitSender` from already open `GpioOut` implementations.
+    pub fn new(clock: T, data: T, cycle: Duration) -> Self {
+        Self { clock, data, cycle }
+    }
+
     /// Puts pins in their default "waiting" state, should be preformed after
     /// construction in most case.
     pub fn start(&mut self) -> Result<(), T::Error> {
@@ -219,7 +253,7 @@ impl BitSender<SysFsGpioOutput> {
     /// * `clock_cycle` - Delay between each clock change, up or down.
     #[inline]
     #[must_use]
-    pub fn new(clock_pin: u16, data_pin: u16, clock_cycle: Duration) -> io::Result<Self> {
+    pub fn open(clock_pin: u16, data_pin: u16, clock_cycle: Duration) -> io::Result<Self> {
         Ok(Self {
             clock: SysFsGpioOutput::open(clock_pin)?,
             data: SysFsGpioOutput::open(data_pin)?,
@@ -228,17 +262,22 @@ impl BitSender<SysFsGpioOutput> {
     }
 }
 
-/// Struct for recieving bits on a serial bus, since the instance belongs to the
+/// Struct for receiving bits on a serial bus, since the instance belongs to the
 /// controller device all addresses in packets are the address of the sending
 /// device, not the recipiant.
-struct BitReciever<T: GpioIn> {
+struct BitReceiver<T: GpioIn> {
     clock: T,
     data: T,
 }
 
-impl<T: GpioIn> BitReciever<T> {
+impl<T: GpioIn> BitReceiver<T> {
+    /// Creates a new `BitReceiver` from already open `GpioIn` implementations.
+    pub fn new(clock: T, data: T) -> Self {
+        Self { clock, data }
+    }
+
     /// Waits for the start signal and then reads the given number of bits and
-    /// returns the recieved `SerialData`, of which the second value is always
+    /// returns the received `SerialData`, of which the second value is always
     /// the `size` parameter of this function.
     ///
     /// # Arguments
@@ -282,11 +321,11 @@ impl<T: GpioIn> BitReciever<T> {
     }
 }
 
-impl BitReciever<SysFsGpioInput> {
-    /// Produces a new `BitReciever` given the clock and data pins to read from.
+impl BitReceiver<SysFsGpioInput> {
+    /// Produces a new `BitReceiver` given the clock and data pins to read from.
     #[inline]
     #[must_use]
-    pub fn new(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
+    pub fn open(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
         let clock = SysFsGpioInput::open(clock_pin)?;
         let data = SysFsGpioInput::open(data_pin)?;
 
@@ -563,7 +602,7 @@ pub type SerialData = (u64, u8);
 
 #[cfg(test)]
 mod tests {
-    use super::{BitReciever, BitSender, Packet};
+    use super::{BitReceiver, BitSender, Packet};
     use gpio::{
         dummy::{DummyGpioIn, DummyGpioOut},
         GpioIn, GpioValue,
@@ -609,7 +648,7 @@ mod tests {
                     v
                 };
 
-                let mut reciever = BitReciever::<DummyGpioIn<&dyn Fn() -> GpioValue>>::new(
+                let mut reciever = BitReceiver::<DummyGpioIn<&dyn Fn() -> GpioValue>>::new(
                     &clock_read,
                     &data_read,
                 );
@@ -684,7 +723,7 @@ mod tests {
         }
     }
 
-    impl<'a> BitReciever<DummyGpioIn<&'a dyn Fn() -> GpioValue>> {
+    impl<'a> BitReceiver<DummyGpioIn<&'a dyn Fn() -> GpioValue>> {
         /// Creates a new dummy `BitReciever` for unit testing.
         #[inline]
         #[must_use]
