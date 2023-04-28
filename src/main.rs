@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
+mod crwl;
 mod log;
 use gilrs::{Axis, Button, EventType, Gilrs};
 use rbtcs::{angle::Angle, gyro, headless::DriveMode, motor, serial, DriveState, DriveVector};
