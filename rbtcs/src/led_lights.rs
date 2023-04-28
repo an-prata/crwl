@@ -21,8 +21,9 @@ impl Controller {
     /// Sets the color of the LED lights.
     #[inline]
     #[must_use]
-    pub fn set_color(&mut self, color: Color) {
+    pub fn set_color(&mut self, color: Color) -> serial::Packet<LedHeader, Color> {
         self.color = Some(color);
+        self.gen_packet()
     }
 
     /// Generates a `serial::Packet<LedHeader>` for sending using a

@@ -58,7 +58,18 @@ impl bot::Bot for Crwl {
     where
         T: gpio::GpioIn,
     {
-        Ok(())
+        // TODO: this bitch async
+        self.gyro.update(serial_tx, serial_rx);
+
+        match serial_tx.send(self.leds.set_color(match state {
+            bot::State::Emergency(_) => led_lights::Color::from_rgb(1f32, 0f32, 0f32),
+            _ => led_lights::Color::from_rgb(1f32, 1f32, 1f32),
+        })) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(bot::BotError::new(String::from(
+                "serial send failed for LED color set",
+            ))),
+        }
     }
 
     fn run_enabled<T>(
