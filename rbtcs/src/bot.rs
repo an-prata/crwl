@@ -344,8 +344,16 @@ pub type BotResult<T> = Result<T, BotError>;
 
 /// Represents an error that can occure within a loop or "run" function related
 /// to the `Bot` trait or `BotRunner` struct.
-#[derive(Clone, Copy, Debug)]
-pub struct BotError;
+#[derive(Clone, Debug)]
+pub struct BotError {
+    pub msg: String,
+}
+
+impl BotError {
+    pub fn new(msg: String) -> Self {
+        Self { msg }
+    }
+}
 
 impl Error for BotError {}
 

@@ -3,7 +3,12 @@
 // See LICENSE file in repository root for complete license text.
 
 use gilrs::Button;
-use rbtcs::{bot, gyro, headless::DriveMode, led_lights, mecanum, motor};
+use rbtcs::{
+    bot::{self, BotResult},
+    gyro,
+    headless::DriveMode,
+    led_lights, mecanum, motor,
+};
 use std::time;
 
 pub struct Crwl {
@@ -112,14 +117,18 @@ impl bot::Bot for Crwl {
         .speeds
         .iter()
         .zip(self.motors)
-        .map(|(s, m)| {
-            m.set(*s as f32)
-                .expect("output from `DriveState::new()` should always be valid")
+        .map(|(s, mut m)| {
+            serial_tx.send(
+                m.set(*s as f32)
+                    .expect("output from `DriveState::new()` should always be valid"),
+            )
         })
-        .any(|p| serial_tx.send(p).is_err())
+        .collect::<Result<Vec<_>, _>>()
         {
-            true => Err(bot::BotError),
-            false => Ok(bot::State::Enabled(Some(time))),
+            Ok(_) => Ok(bot::State::Enabled(Some(time))),
+            Err(_) => Err(bot::BotError::new(String::from(
+                "could not send motor speeds over serial",
+            ))),
         }
     }
 
@@ -148,14 +157,18 @@ impl bot::Bot for Crwl {
             .speeds
             .iter()
             .zip(self.motors)
-            .map(|(s, m)| {
-                m.set(*s as f32)
-                    .expect("speed of 0 should never be invalid")
+            .map(|(s, mut m)| {
+                serial_tx.send(
+                    m.set(*s as f32)
+                        .expect("speed of 0 should never be invalid"),
+                )
             })
-            .any(|p| serial_tx.send(p).is_err())
+            .collect::<Result<Vec<_>, _>>()
         {
-            true => Err(bot::BotError),
-            false => Ok(bot::State::Disabled(Some(time))),
+            Ok(_) => Ok(bot::State::Disabled(Some(time))),
+            Err(_) => Err(bot::BotError::new(String::from(
+                "could not disable motors over serial",
+            ))),
         }
     }
 
