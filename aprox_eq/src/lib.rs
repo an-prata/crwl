@@ -94,16 +94,34 @@ macro_rules! assert_aprox_ne {
     };
 }
 
+// Unfortunatly this doesnt work since f64 or f32 could theoretically implement
+// the `Iterator` trait... :(
+
+// impl<T, U> AproxEq for T
+// where
+//     T: Iterator<Item = U>,
+//     U: AproxEq,
+// {
+//     /// Aproximate equality on iterators only compares elements up to the last
+//     /// element of the shortest iterator.
+//     fn aprox_eq(&self, other: &Self) -> bool {
+//         self.iter()
+//             .zip(other)
+//             .map(|(a, b)| a.aprox_eq(b))
+//             .fold(true, |a, b| a && b)
+//     }
+// }
+
 impl AproxEq for f64 {
     fn aprox_eq(&self, other: &Self) -> bool {
-        // Aproximately equal if within 10^-10 of eachother.
+        // Aproximately equal if within 1^-10 of eachother.
         (self - other).abs() < 1_f64.powi(-10)
     }
 }
 
 impl AproxEq for f32 {
     fn aprox_eq(&self, other: &Self) -> bool {
-        // Aproximately equal if within 10^-8 of eachother.
+        // Aproximately equal if within 1^-8 of eachother.
         (self - other).abs() < 10_f32.powi(-8)
     }
 }
