@@ -37,7 +37,6 @@ where
 {
     state: State,
     gilrs: gilrs::Gilrs,
-    events: Vec<gilrs::Event>,
     relay: U,
     serial_tx: serial::Client,
     serial_rx: serial::Server<V>,
@@ -75,13 +74,6 @@ where
         match || -> BotResult<State> {
             Ok(match self.state {
                 State::Enabled(t) => {
-                    self.events.clear();
-
-                    // Get new controller events for enabled mode.
-                    while let Some(e) = self.gilrs.next_event() {
-                        self.events.push(e);
-                    }
-
                     self.relay
                         .set_high()
                         .expect("relay pin should not fail to set ");
@@ -89,7 +81,7 @@ where
                         .run_base(self.state, &mut self.serial_tx, &mut self.serial_rx)?;
                     self.bot.run_enabled(
                         now_if_none!(t),
-                        self.events.as_slice(),
+                        &mut self.gilrs,
                         &mut self.serial_tx,
                         &mut self.serial_rx,
                     )?
@@ -160,23 +152,17 @@ where
     /// The returned instance will have the state `State::Disabled` with a value
     /// of the time it was created.
     #[must_use]
-    pub fn new(bot: T, cycle: time::Duration) -> io::Result<Self> {
+    pub fn new(bot: T) -> io::Result<Self> {
         let mut gilrs = gilrs::Gilrs::new().unwrap();
-        let mut events = Vec::new();
-
-        while let Some(e) = gilrs.next_event() {
-            events.push(e);
-        }
 
         Ok(Self {
             state: State::Disabled(Some(time::Instant::now())),
             gilrs,
-            events,
             relay: SysFsGpioOutput::open(T::RELAY_PIN)?,
             serial_tx: serial::Client::new(
                 SysFsGpioOutput::open(T::TX_CLOCK)?,
                 SysFsGpioOutput::open(T::TX_DATA)?,
-                cycle,
+                T::SERIAL_CYCLE,
             ),
             serial_rx: serial::Server::new(
                 SysFsGpioInput::open(T::RX_CLOCK)?,
@@ -206,6 +192,9 @@ pub trait Bot {
     /// measure when the pin is low it should disallow power to the devices, for
     /// the same reason if this pin ever fails to set the program will panic.
     const RELAY_PIN: u16;
+
+    /// Time between each bit on serial transmission.
+    const SERIAL_CYCLE: time::Duration;
 
     /// Always runs except in an emergency state, should manage simple things
     /// like LED lights or cameras that dont cause a danger or potential harm
@@ -248,7 +237,7 @@ pub trait Bot {
     fn run_enabled<T>(
         &mut self,
         time: time::Instant,
-        events: &[gilrs::Event],
+        gp_inputs: &mut gilrs::Gilrs,
         serial_tx: &mut serial::Client,
         serial_rx: &mut serial::Server<T>,
     ) -> BotResult<State>
