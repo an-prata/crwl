@@ -117,7 +117,9 @@ where
                     self.relay
                         .set_low()
                         .expect("relay pin should not fail to set ");
-                    self.bot.run_emergency(now_if_none!(t))?
+                    self.bot
+                        .run_emergency(now_if_none!(t))
+                        .expect("errors in emergency should not occure")
                 }
             })
         }() {
@@ -153,11 +155,9 @@ where
     /// of the time it was created.
     #[must_use]
     pub fn new(bot: T) -> io::Result<Self> {
-        let mut gilrs = gilrs::Gilrs::new().unwrap();
-
         Ok(Self {
             state: State::Disabled(Some(time::Instant::now())),
-            gilrs,
+            gilrs: gilrs::Gilrs::new().unwrap(),
             relay: SysFsGpioOutput::open(T::RELAY_PIN)?,
             serial_tx: serial::Client::new(
                 SysFsGpioOutput::open(T::TX_CLOCK)?,
