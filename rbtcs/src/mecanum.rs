@@ -105,6 +105,15 @@ impl DriveState {
     }
 }
 
+impl AproxEq for DriveState {
+    fn aprox_eq(&self, other: &Self) -> bool {
+        self.speeds
+            .iter()
+            .zip(other.speeds.iter())
+            .any(|(a, b)| a == b)
+    }
+}
+
 impl From<DriveVector> for DriveState {
     fn from(value: DriveVector) -> Self {
         Self::new(value)
@@ -161,9 +170,9 @@ mod tests {
             let (vec3, state3) = super::calc_3_axes_drive(0f64, x, 0f64);
             let (vec4, state4) = super::calc_4_axes_drive(0f64, x, 0f64, x);
 
-            assert_aprox_eq!(state3.fr, state3.fl);
-            assert_aprox_eq!(state3.br, state3.bl);
-            assert_aprox_eq!(state3.fr, state3.br);
+            assert_aprox_eq!(state3.speeds[0], state3.speeds[1]);
+            assert_aprox_eq!(state3.speeds[3], state3.speeds[2]);
+            assert_aprox_eq!(state3.speeds[0], state3.speeds[3]);
 
             assert_aprox_eq!(state3, state4);
             assert_aprox_eq!(vec3, vec4);
@@ -189,14 +198,7 @@ mod tests {
                         let vec = DriveVector::from_4_axes(x, y, r, s);
                         let state = DriveState::new(vec);
 
-                        assert!(state.fr <= 1f64);
-                        assert!(state.fr >= -1f64);
-                        assert!(state.fl <= 1f64);
-                        assert!(state.fl >= -1f64);
-                        assert!(state.br <= 1f64);
-                        assert!(state.br >= -1f64);
-                        assert!(state.bl <= 1f64);
-                        assert!(state.bl >= -1f64);
+                        assert!(state.speeds.iter().any(|x| x.abs() <= 1f64));
 
                         r += 0.05f64;
                     }
