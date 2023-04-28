@@ -99,6 +99,27 @@ where
         }
     }
 
+    /// Listens for the start of a packet, upon finding one will read and return
+    /// a generic packet of type `Packet<(u8, u8), u32>`.
+    #[must_use]
+    pub async fn listen(&mut self) -> ListenResult<Packet<(u8, u8), u32>> {
+        match self.receiver.recv(Packet::<(u8, u8), u32>::BITS as u8) {
+            Ok(packet) => match packet {
+                Some((v, _)) => {
+                    let addr = (v >> (u8::BITS + u32::BITS)) as u8;
+                    let cmd = (v >> u32::BITS) as u8;
+                    let data = v as u32;
+
+                    Ok(Packet::new((addr, cmd), data))
+                }
+
+                None => Err(ListenError),
+            },
+
+            Err(_) => Err(ListenError),
+        }
+    }
+
     /// Listens for a packet with the given head and returns its data. Since all
     /// recieved data is gotten by request any packet with a different header is
     /// an error. Will block the current thread until the packet is recieved.
@@ -106,28 +127,13 @@ where
     /// # Arguments
     ///
     /// * `head` - Packet head to listen for.
-    /// * `data_type` - Enum variant of `Data` to return.
     #[must_use]
     pub async fn listen_for<U, V>(&mut self, head: U) -> ListenResult<V>
     where
         U: Header,
         V: Data,
     {
-        let recieved_packet = match self.receiver.recv(Packet::<(u8, u8), u32>::BITS as u8) {
-            Ok(packet) => match packet {
-                Some((v, _)) => {
-                    let addr = (v >> (u8::BITS + u32::BITS)) as u8;
-                    let cmd = (v >> u32::BITS) as u8;
-                    let data = v as u32;
-
-                    Packet::new((addr, cmd), data)
-                }
-
-                None => return Err(ListenError),
-            },
-
-            Err(_) => return Err(ListenError),
-        };
+        let recieved_packet = self.listen().await?;
 
         // Since all recived data is made by request we should be recieving
         // exactly the listened for header, anything else is an error.
@@ -141,26 +147,32 @@ where
         }
     }
 
-    /// Listens for packets with all given heads in order, returns an error if
-    /// any packet comes with the wrong header or in the wrong order.
+    /// Listens for a packet with the given head and returns its data. Unlike
+    /// `serial::Server::listen_for()` this function will not return and error
+    /// if the expected head is not received and will instead continue to
+    /// listen. Will block the current thread until the packet is recieved.
     ///
     /// # Arguments
     ///
-    /// * `heads` - A slice of `Header`s in the order the are expect to come.
-    /// * `data_type` - Enum variant of `Data` to return.
+    /// * `head` - Packet head to listen for.
     #[must_use]
-    pub async fn listen_for_seq<U, V>(&mut self, heads: &[U]) -> ListenResult<Vec<V>>
+    pub async fn listen_until<U, V>(&mut self, head: U) -> ListenResult<V>
     where
         U: Header,
         V: Data,
     {
-        let mut data: Vec<V> = Vec::new();
+        let mut recieved_packet = self.listen().await?;
 
-        for h in heads {
-            data.push(self.listen_for::<U, V>(*h).await?);
+        // If we didnt get the head we wanted we just try again, and again, and
+        // again, and again...
+        while recieved_packet.head.get() != head.get() {
+            recieved_packet = self.listen().await?;
         }
 
-        Ok(data)
+        match V::extract(&recieved_packet) {
+            Ok(v) => Ok(v),
+            Err(_) => Err(ListenError),
+        }
     }
 }
 
