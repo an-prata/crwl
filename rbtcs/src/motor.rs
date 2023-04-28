@@ -41,13 +41,16 @@ impl Controller {
 
     /// Sets the desired motor speed. Returns an error if `speed` is infinite or
     /// `NaN` (as checked by `f32::is_finite()`).
-    pub fn set(&mut self, speed: f32) -> Result<(), InvalidSpeedError> {
+    pub fn set(
+        &mut self,
+        speed: f32,
+    ) -> Result<serial::Packet<MotorHeader, MotorData>, InvalidSpeedError> {
         if !speed.is_finite() {
             return Err(InvalidSpeedError);
         }
 
         self.speed = speed.clamp(Self::MIN_SPEED, Self::MAX_SPEED);
-        Ok(())
+        Ok(self.gen_packet())
     }
 
     /// Gets the motor controller's set speed.
