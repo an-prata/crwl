@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use crate::angle::Angle;
+use crate::{angle::Angle, motor, serial::Packet};
 use aprox_eq::AproxEq;
 use std::f64;
 
@@ -48,6 +48,8 @@ impl DriveVector {
     /// * `translation_x` - The translation speed along the x axis.
     /// * `translation_y` - The translation speed along the y axis.
     /// * `rotation` - Speed of rotation, positive is clockwise.
+    #[inline]
+    #[must_use]
     pub fn from_3_axes(translation_x: f64, translation_y: f64, rotation: f64) -> Self {
         DriveVector {
             angle: Angle::from_point(translation_x, translation_y),
@@ -65,6 +67,8 @@ impl DriveVector {
     /// * `y` - The y coordinate to "aim" for.
     /// * `rotation` - Speed of rotation, positive is clockwise.
     /// * `speed` - Translation speed, does not affect rotation.
+    #[inline]
+    #[must_use]
     pub fn from_4_axes(x: f64, y: f64, rotation: f64, speed: f64) -> Self {
         DriveVector {
             angle: Angle::from_point(x, y),
@@ -76,28 +80,34 @@ impl DriveVector {
 
 /// Represents a single frame of the drive train's state and holds data for all
 /// four motors/wheels.
-#[derive(AproxEq, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DriveState {
-    pub fr: f64,
-    pub fl: f64,
-    pub br: f64,
-    pub bl: f64,
+    /// Motor speeds arranges going counter clockwise starting at the front
+    /// right motor: fr, fl, bl, br.
+    pub speeds: Vec<f64>,
 }
 
 impl DriveState {
     /// Creates a `DriveState` to achieve the given `DriveVector`.
+    #[must_use]
     pub fn new(vec: DriveVector) -> Self {
-        let fr_speed = f64::sin((vec.angle + FR_ANG).radians()) * vec.magnitude - vec.rotation;
-        let fl_speed = f64::sin((vec.angle + FL_ANG).radians()) * vec.magnitude + vec.rotation;
-        let br_speed = f64::sin((vec.angle + BR_ANG).radians()) * vec.magnitude - vec.rotation;
-        let bl_speed = f64::sin((vec.angle + BL_ANG).radians()) * vec.magnitude + vec.rotation;
-
-        DriveState {
-            fr: fr_speed.clamp(-1f64, 1f64),
-            fl: fl_speed.clamp(-1f64, 1f64),
-            br: br_speed.clamp(-1f64, 1f64),
-            bl: bl_speed.clamp(-1f64, 1f64),
+        Self {
+            speeds: [
+                f64::sin((vec.angle + FR_ANG).radians()) * vec.magnitude - vec.rotation,
+                f64::sin((vec.angle + FL_ANG).radians()) * vec.magnitude + vec.rotation,
+                f64::sin((vec.angle + BL_ANG).radians()) * vec.magnitude + vec.rotation,
+                f64::sin((vec.angle + BR_ANG).radians()) * vec.magnitude - vec.rotation,
+            ]
+            .iter()
+            .map(|x| x.clamp(-1f64, 1f64))
+            .collect(),
         }
+    }
+}
+
+impl From<DriveVector> for DriveState {
+    fn from(value: DriveVector) -> Self {
+        Self::new(value)
     }
 }
 
@@ -110,6 +120,8 @@ impl DriveState {
 /// * `translation_x` - The translation speed along the x axis.
 /// * `translation_y` - The translation speed along the y axis.
 /// * `rotation` - Speed of rotation, positive is clockwise.
+#[inline]
+#[must_use]
 pub fn calc_3_axes_drive(
     translation_x: f64,
     translation_y: f64,
@@ -129,6 +141,8 @@ pub fn calc_3_axes_drive(
 /// * `y` - The y coordinate to "aim" for.
 /// * `rotation` - Speed of rotation, positive is clockwise.
 /// * `speed` - Translation speed, does not affect rotation.
+#[inline]
+#[must_use]
 pub fn calc_4_axes_drive(x: f64, y: f64, rotation: f64, speed: f64) -> (DriveVector, DriveState) {
     let vec = DriveVector::from_4_axes(x, y, rotation, speed);
     (vec, DriveState::new(vec))
