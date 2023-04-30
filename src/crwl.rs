@@ -79,7 +79,7 @@ impl bot::Bot for Crwl {
                 .map(|h| serial_rx.get(*h))
                 .filter(|r| r.is_some())
                 .map(|r| r.unwrap())
-                .collect::<Vec<serial::Packet<(u8, u8), u32>>>()
+                .collect::<Vec<serial::Packet<_, _>>>()
                 .as_slice(),
         );
 
