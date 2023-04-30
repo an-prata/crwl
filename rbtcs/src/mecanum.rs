@@ -131,7 +131,7 @@ impl From<DriveVector> for DriveState {
 /// * `rotation` - Speed of rotation, positive is clockwise.
 #[inline]
 #[must_use]
-pub fn calc_3_axes_drive(
+pub fn calc_3_axis_drive(
     translation_x: f64,
     translation_y: f64,
     rotation: f64,
@@ -152,7 +152,7 @@ pub fn calc_3_axes_drive(
 /// * `speed` - Translation speed, does not affect rotation.
 #[inline]
 #[must_use]
-pub fn calc_4_axes_drive(x: f64, y: f64, rotation: f64, speed: f64) -> (DriveVector, DriveState) {
+pub fn calc_4_axis_drive(x: f64, y: f64, rotation: f64, speed: f64) -> (DriveVector, DriveState) {
     let vec = DriveVector::from_4_axes(x, y, rotation, speed);
     (vec, DriveState::new(vec))
 }
@@ -167,8 +167,8 @@ mod tests {
         let mut x: f64 = 0f64;
 
         while x <= 1f64 {
-            let (vec3, state3) = super::calc_3_axes_drive(0f64, x, 0f64);
-            let (vec4, state4) = super::calc_4_axes_drive(0f64, x, 0f64, x);
+            let (vec3, state3) = super::calc_3_axis_drive(0f64, x, 0f64);
+            let (vec4, state4) = super::calc_4_axis_drive(0f64, x, 0f64, x);
 
             assert_aprox_eq!(state3.speeds[0], state3.speeds[1]);
             assert_aprox_eq!(state3.speeds[3], state3.speeds[2]);
