@@ -10,7 +10,7 @@ use crate::{
 /// Represents a drive mode, namely the drive's frame of reference for controls.
 #[derive(Debug)]
 pub enum DriveMode {
-    Headless,
+    Headless(Angle),
     Relative,
 }
 
