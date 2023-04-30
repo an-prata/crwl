@@ -2,12 +2,11 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use gilrs::Button;
+use gilrs::{Button, GamepadId};
 use rbtcs::{
-    bot::{self, BotResult},
-    gyro,
-    headless::DriveMode,
-    led_lights, mecanum, motor,
+    bot, gyro,
+    headless::{self, DriveMode},
+    led_lights, mecanum, motor, serial,
 };
 use std::time;
 
@@ -35,7 +34,7 @@ impl Crwl {
                 motor::Controller::new(Self::BR_ADDR),
             ],
             drive_mode: DriveMode::Relative,
-            gyro: gyro::Controller::new(5u8),
+            gyro: gyro::Controller::new(Self::GYRO_ADDR),
             leds: led_lights::Controller::new(Self::LED_ADDR),
         }
     }
@@ -49,17 +48,20 @@ impl bot::Bot for Crwl {
     const RELAY_PIN: u16 = 4u16;
     const SERIAL_CYCLE: time::Duration = time::Duration::from_millis(2u64);
 
-    fn run_base<T>(
+    fn run_base(
         &mut self,
         state: bot::State,
         serial_tx: &mut rbtcs::serial::Client,
-        serial_rx: &mut rbtcs::serial::Server<T>,
-    ) -> bot::BotResult<()>
-    where
-        T: gpio::GpioIn,
-    {
-        // TODO: this bitch async
-        self.gyro.update(serial_tx, serial_rx);
+        serial_rx: &mut rbtcs::serial::Server,
+    ) -> bot::BotResult<bot::State> {
+        let headers: Vec<gyro::GyroHeader> = self
+            .gyro
+            .request_all()
+            .iter()
+            .map(|r| serial_tx.send(*r))
+            .filter(|r| r.is_ok())
+            .map(|r| r.unwrap())
+            .collect();
 
         match serial_tx.send(self.leds.set_color(match state {
             bot::State::Emergency(_) => led_lights::Color::from_rgb(1f32, 0f32, 0f32),
@@ -69,29 +71,41 @@ impl bot::Bot for Crwl {
             Err(_) => Err(bot::BotError::new(String::from(
                 "serial send failed for LED color set",
             ))),
-        }
+        }?;
+
+        self.gyro.update(
+            headers
+                .iter()
+                .map(|h| serial_rx.get(*h))
+                .filter(|r| r.is_some())
+                .map(|r| r.unwrap())
+                .collect::<Vec<serial::Packet<(u8, u8), u32>>>()
+                .as_slice(),
+        );
+
+        Ok(state)
     }
 
-    fn run_enabled<T>(
+    fn run_enabled(
         &mut self,
         time: std::time::Instant,
         gp_inputs: &mut gilrs::Gilrs,
         serial_tx: &mut rbtcs::serial::Client,
-        serial_rx: &mut rbtcs::serial::Server<T>,
-    ) -> bot::BotResult<bot::State>
-    where
-        T: gpio::GpioIn,
-    {
-        let mut gp: Option<gilrs::Gamepad> = None;
+        _serial_rx: &mut rbtcs::serial::Server,
+    ) -> bot::BotResult<bot::State> {
+        let mut gp_id: Option<GamepadId> = None;
 
         while let Some(event) = gp_inputs.next_event() {
-            gp = Some(gp_inputs.gamepad(event.id));
+            gp_id = Some(event.id);
 
             match event.event {
                 gilrs::EventType::ButtonReleased(Button::LeftThumb, _) => {
                     self.drive_mode = match self.drive_mode {
-                        DriveMode::Headless => DriveMode::Relative,
-                        DriveMode::Relative => DriveMode::Headless,
+                        DriveMode::Headless(_) => DriveMode::Relative,
+                        DriveMode::Relative => match self.gyro.yaw() {
+                            Some(v) => DriveMode::Headless(v),
+                            None => DriveMode::Relative,
+                        },
                     }
                 }
                 gilrs::EventType::ButtonReleased(Button::Start, _) => self.gyro.zero(),
@@ -99,38 +113,44 @@ impl bot::Bot for Crwl {
             }
         }
 
-        let gp = match gp {
-            Some(g) => g,
+        let gp = match gp_id {
+            Some(id) => gp_inputs.gamepad(id),
             None => return Ok(bot::State::Enabled(Some(time))),
         };
 
-        match mecanum::DriveState::new(mecanum::DriveVector::from_4_axes(
-            match gp.axis_data(gilrs::Axis::LeftStickX) {
-                Some(a) => a.value() as f64,
-                None => 0f64,
-            },
-            match gp.axis_data(gilrs::Axis::LeftStickY) {
-                Some(a) => a.value() as f64,
-                None => 0f64,
-            },
-            match gp.axis_data(gilrs::Axis::RightStickX) {
-                Some(a) => a.value() as f64,
-                None => 0f64,
-            },
-            match gp.axis_data(gilrs::Axis::RightZ) {
-                Some(a) => a.value() as f64,
-                None => 0f64,
-            } - match gp.axis_data(gilrs::Axis::LeftZ) {
-                Some(a) => a.value() as f64,
-                None => 0f64,
-            },
-        ))
+        let left_x = match gp.axis_data(gilrs::Axis::LeftStickX) {
+            Some(a) => a.value() as f64,
+            None => 0f64,
+        };
+        let left_y = match gp.axis_data(gilrs::Axis::LeftStickY) {
+            Some(a) => a.value() as f64,
+            None => 0f64,
+        };
+        let right_x = match gp.axis_data(gilrs::Axis::RightStickX) {
+            Some(a) => a.value() as f64,
+            None => 0f64,
+        };
+        let speed = match gp.axis_data(gilrs::Axis::RightZ) {
+            Some(a) => a.value() as f64,
+            None => 0f64,
+        } - match gp.axis_data(gilrs::Axis::LeftZ) {
+            Some(a) => a.value() as f64,
+            None => 0f64,
+        };
+        match match self.drive_mode {
+            DriveMode::Relative => mecanum::calc_4_axis_drive(left_x, left_y, right_x, speed),
+            DriveMode::Headless(v) => {
+                headless::calc_4_axis_headless(left_x, left_y, right_x, speed, v)
+            }
+        }
+        .1
         .speeds
         .iter()
-        .zip(self.motors)
-        .map(|(s, mut m)| {
+        .zip(0..self.motors.len())
+        .map(|(s, m)| {
             serial_tx.send(
-                m.set(*s as f32)
+                self.motors[m]
+                    .set(*s as f32)
                     .expect("output from `DriveState::new()` should always be valid"),
             )
         })
@@ -143,34 +163,29 @@ impl bot::Bot for Crwl {
         }
     }
 
-    fn run_idling<T>(
+    fn run_idling(
         &mut self,
-        time: std::time::Instant,
-        serial_tx: &mut rbtcs::serial::Client,
-        serial_rx: &mut rbtcs::serial::Server<T>,
-    ) -> bot::BotResult<bot::State>
-    where
-        T: gpio::GpioIn,
-    {
+        _time: std::time::Instant,
+        _serial_tx: &mut rbtcs::serial::Client,
+        _serial_rx: &mut rbtcs::serial::Server,
+    ) -> bot::BotResult<bot::State> {
         Ok(bot::State::Idling(Some(time::Instant::now())))
     }
 
-    fn run_disabled<T>(
+    fn run_disabled(
         &mut self,
         time: std::time::Instant,
         serial_tx: &mut rbtcs::serial::Client,
-        serial_rx: &mut rbtcs::serial::Server<T>,
-    ) -> bot::BotResult<bot::State>
-    where
-        T: gpio::GpioIn,
-    {
+        _serial_rx: &mut rbtcs::serial::Server,
+    ) -> bot::BotResult<bot::State> {
         match mecanum::DriveState::from(mecanum::DriveVector::from_3_axes(0f64, 0f64, 0f64))
             .speeds
             .iter()
-            .zip(self.motors)
-            .map(|(s, mut m)| {
+            .zip(0..self.motors.len())
+            .map(|(s, m)| {
                 serial_tx.send(
-                    m.set(*s as f32)
+                    self.motors[m]
+                        .set(*s as f32)
                         .expect("speed of 0 should never be invalid"),
                 )
             })

@@ -8,7 +8,6 @@ edition = "2021"
 [dependencies]
 gilrs = "0.10.1"
 gpio = "0.4.1"
-tokio = { version = "1", features = ["full"] }
 
 [dependencies.rbtcs]
 path = "./rbtcs"
