@@ -122,14 +122,17 @@ impl bot::Bot for Crwl {
             Some(a) => a.value() as f64,
             None => 0f64,
         };
+
         let left_y = match gp.axis_data(gilrs::Axis::LeftStickY) {
             Some(a) => a.value() as f64,
             None => 0f64,
         };
+
         let right_x = match gp.axis_data(gilrs::Axis::RightStickX) {
             Some(a) => a.value() as f64,
             None => 0f64,
         };
+
         let speed = match gp.axis_data(gilrs::Axis::RightZ) {
             Some(a) => a.value() as f64,
             None => 0f64,
@@ -137,6 +140,7 @@ impl bot::Bot for Crwl {
             Some(a) => a.value() as f64,
             None => 0f64,
         };
+
         match match self.drive_mode {
             DriveMode::Relative => mecanum::calc_4_axis_drive(left_x, left_y, right_x, speed),
             DriveMode::Headless(v) => {
