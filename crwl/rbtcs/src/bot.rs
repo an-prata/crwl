@@ -5,7 +5,7 @@
 use crate::serial;
 use gpio::{
     sysfs::{SysFsGpioInput, SysFsGpioOutput},
-    GpioIn, GpioOut,
+    GpioOut,
 };
 use std::{
     error::Error,
@@ -27,29 +27,23 @@ macro_rules! now_if_none {
 
 /// Manages the running of a `Bot` implementation and keeps track of robot
 /// state, serial, controllers, etc.
-pub struct BotRunner<T, U, V>
+pub struct BotRunner<T, U>
 where
     T: Bot,
-    U: GpioOut,
-    V: GpioIn,
-    <U as GpioOut>::Error: Debug,
-    <V as GpioIn>::Error: Debug,
 {
     state: State,
     gilrs: gilrs::Gilrs,
     relay: U,
     serial_tx: serial::Client,
-    serial_rx: serial::Server<V>,
+    serial_rx: serial::Server,
     bot: T,
 }
 
-impl<T, U, V> BotRunner<T, U, V>
+impl<T, U> BotRunner<T, U>
 where
-    T: Bot,
-    U: GpioOut,
-    V: GpioIn,
-    <U as GpioOut>::Error: Debug,
-    <V as GpioIn>::Error: Debug,
+    T: Bot + Send,
+    U: GpioOut + Send + 'static,
+    <U as GpioOut>::Error: Debug + Send,
 {
     /// Starts a loop calling `BotRunner::run()`.
     #[inline]
@@ -71,64 +65,51 @@ where
         // but i also love how absolutely stupid this is while also being kinda
         // awesome at the same time.
 
-        match || -> BotResult<State> {
-            Ok(match self.state {
-                State::Enabled(t) => {
-                    self.relay
-                        .set_high()
-                        .expect("relay pin should not fail to set ");
-                    self.bot
-                        .run_base(self.state, &mut self.serial_tx, &mut self.serial_rx)?;
-                    self.bot.run_enabled(
-                        now_if_none!(t),
-                        &mut self.gilrs,
-                        &mut self.serial_tx,
-                        &mut self.serial_rx,
-                    )?
-                }
+        let base_state = match self.state {
+            State::Emergency(t) => {
+                self.relay
+                    .set_low()
+                    .expect("relay pin should not fail to set ");
+                self.bot
+                    .run_emergency(t.unwrap_or(time::Instant::now()))
+                    .expect("errors in emergency should not occure");
+                return;
+            }
+            _ => {
+                self.relay
+                    .set_high()
+                    .expect("relay pin should not fail to set");
+                self.bot
+                    .run_base(self.state, &mut self.serial_tx, &mut self.serial_rx)
+                    .unwrap_or(State::Emergency(Some(time::Instant::now())))
+            }
+        };
 
-                State::Idling(t) => {
-                    self.relay
-                        .set_high()
-                        .expect("relay pin should not fail to set ");
-                    self.bot
-                        .run_base(self.state, &mut self.serial_tx, &mut self.serial_rx)?;
-                    self.bot.run_idling(
-                        now_if_none!(t),
-                        &mut self.serial_tx,
-                        &mut self.serial_rx,
-                    )?
-                }
-
-                State::Disabled(t) => {
-                    self.relay
-                        .set_high()
-                        .expect("relay pin should not fail to set ");
-                    self.bot
-                        .run_base(self.state, &mut self.serial_tx, &mut self.serial_rx)?;
-                    self.bot.run_disabled(
-                        now_if_none!(t),
-                        &mut self.serial_tx,
-                        &mut self.serial_rx,
-                    )?
-                }
-
-                State::Emergency(t) => {
-                    self.relay
-                        .set_low()
-                        .expect("relay pin should not fail to set ");
-                    self.bot
-                        .run_emergency(now_if_none!(t))
-                        .expect("errors in emergency should not occure")
-                }
-            })
-        }() {
-            Ok(s) => self.state = s,
+        self.state = match match base_state {
+            State::Enabled(t) => self.bot.run_enabled(
+                t.unwrap_or(time::Instant::now()),
+                &mut self.gilrs,
+                &mut self.serial_tx,
+                &mut self.serial_rx,
+            ),
+            State::Idling(t) => self.bot.run_idling(
+                t.unwrap_or(time::Instant::now()),
+                &mut self.serial_tx,
+                &mut self.serial_rx,
+            ),
+            State::Disabled(t) => self.bot.run_disabled(
+                t.unwrap_or(time::Instant::now()),
+                &mut self.serial_tx,
+                &mut self.serial_rx,
+            ),
+            State::Emergency(t) => self.bot.run_emergency(t.unwrap_or(time::Instant::now())),
+        } {
+            Ok(s) => s,
             Err(_) => {
                 self.relay
                     .set_low()
                     .expect("relay pin should not fail to set ");
-                self.state = State::Emergency(Some(time::Instant::now()));
+                State::Emergency(Some(time::Instant::now()))
             }
         };
     }
@@ -146,7 +127,7 @@ where
     }
 }
 
-impl<T> BotRunner<T, SysFsGpioOutput, SysFsGpioInput>
+impl<T> BotRunner<T, SysFsGpioOutput>
 where
     T: Bot,
 {
@@ -207,16 +188,13 @@ pub trait Bot {
     /// * `serial_tx` - `serial::Client` for sending serial data.
     /// * `serial_rx` - `serial::Server<T>` for receiving serial data.
     #[allow(unused_variables)]
-    fn run_base<T>(
+    fn run_base(
         &mut self,
         state: State,
         serial_tx: &mut serial::Client,
-        serial_rx: &mut serial::Server<T>,
-    ) -> BotResult<()>
-    where
-        T: GpioIn,
-    {
-        Ok(())
+        serial_rx: &mut serial::Server,
+    ) -> BotResult<State> {
+        Ok(state)
     }
 
     /// Fully operational state, should hold controller input, motor setting,
@@ -234,16 +212,13 @@ pub trait Bot {
     /// Should return a `State` holding the time passed into the function. An
     /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
-    fn run_enabled<T>(
+    fn run_enabled(
         &mut self,
         time: time::Instant,
         gp_inputs: &mut gilrs::Gilrs,
         serial_tx: &mut serial::Client,
-        serial_rx: &mut serial::Server<T>,
-    ) -> BotResult<State>
-    where
-        T: GpioIn,
-    {
+        serial_rx: &mut serial::Server,
+    ) -> BotResult<State> {
         Ok(State::Enabled(Some(time)))
     }
 
@@ -260,15 +235,12 @@ pub trait Bot {
     /// Should return a `State` holding the time passed into the function. An
     /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
-    fn run_idling<T>(
+    fn run_idling(
         &mut self,
         time: time::Instant,
         serial_tx: &mut serial::Client,
-        serial_rx: &mut serial::Server<T>,
-    ) -> BotResult<State>
-    where
-        T: GpioIn,
-    {
+        serial_rx: &mut serial::Server,
+    ) -> BotResult<State> {
         Ok(State::Idling(Some(time)))
     }
 
@@ -285,15 +257,12 @@ pub trait Bot {
     /// Should return a `State` holding the time passed into the function. An
     /// `Err` return variant will change the state to emergency.
     #[allow(unused_variables)]
-    fn run_disabled<T>(
+    fn run_disabled(
         &mut self,
         time: time::Instant,
         serial_tx: &mut serial::Client,
-        serial_rx: &mut serial::Server<T>,
-    ) -> BotResult<State>
-    where
-        T: GpioIn,
-    {
+        serial_rx: &mut serial::Server,
+    ) -> BotResult<State> {
         Ok(State::Disabled(Some(time)))
     }
 

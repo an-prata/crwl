@@ -3,7 +3,6 @@
 // See LICENSE file in repository root for complete license text.
 
 use crate::{angle::Angle, serial};
-use gpio::GpioIn;
 use std::{error::Error, fmt::Display};
 
 /// Responsible for constructing requests for data from a gyro over the serial
@@ -58,66 +57,82 @@ impl Controller {
         }
     }
 
-    /// Updates all this structs values. This will block the current thread
-    /// until completion.
-    pub async fn update<T>(
-        &mut self,
-        client: &mut serial::Client,
-        serv: &mut serial::Server<T>,
-    ) -> RequestResult<()>
+    /// Updates this struct's values given packets received from the gyro, this
+    /// will update whatever values are contained withing the given slice to the
+    /// data contained within the packet with relevant data at the greatest
+    /// index for each value.
+    pub fn update<T, U>(&mut self, packets: &[serial::Packet<T, U>]) -> &Self
     where
-        T: GpioIn,
+        T: serial::Header,
+        U: serial::Data,
     {
-        self.yaw = Some(Angle::from_radians(
-            self.request(client, serv, Request::Yaw).await? as f64,
-        ));
+        for p in packets {
+            match <GyroHeader as serial::Header>::extract(p) {
+                Ok(h) => {
+                    let data = <f32 as serial::Data>::extract(p).ok();
 
-        self.roll = Some(Angle::from_radians(
-            self.request(client, serv, Request::Roll).await? as f64,
-        ));
+                    if h.addr != self.addr || data.is_none() {
+                        continue;
+                    }
 
-        self.pitch = Some(Angle::from_radians(
-            self.request(client, serv, Request::Pitch).await? as f64,
-        ));
+                    match h.cmd {
+                        Request::Yaw => {
+                            self.yaw = data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                        }
+                        Request::Roll => {
+                            self.roll = data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                        }
+                        Request::Pitch => {
+                            self.pitch = data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                        }
+                        Request::YawPerSec => {
+                            self.yaw_per_sec =
+                                data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                        }
+                        Request::RollPerSec => {
+                            self.roll_per_sec =
+                                data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                        }
+                        Request::PitchPerSec => {
+                            self.pitch_per_sec =
+                                data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                        }
+                    };
+                }
 
-        self.yaw_per_sec = Some(Angle::from_radians(
-            self.request(client, serv, Request::YawPerSec).await? as f64,
-        ));
+                Err(_) => continue,
+            };
+        }
 
-        self.roll_per_sec = Some(Angle::from_radians(
-            self.request(client, serv, Request::RollPerSec).await? as f64,
-        ));
-
-        self.pitch_per_sec = Some(Angle::from_radians(
-            self.request(client, serv, Request::PitchPerSec).await? as f64,
-        ));
-
-        Ok(())
+        self
     }
 
-    /// Manually requests a newly updated value from the gyro, this will block
-    /// the current thread until the request in fulfilled, though it should be
-    /// fairly quick.
-    pub async fn request<T>(
-        &mut self,
-        client: &mut serial::Client,
-        serv: &mut serial::Server<T>,
-        req: Request,
-    ) -> RequestResult<f32>
-    where
-        T: GpioIn,
-    {
-        let packet = serial::Packet::new(self.gen_header(req), 0u32);
+    /// Produce a packet for given request.
+    #[inline]
+    #[must_use]
+    pub fn request(&self, req: Request) -> serial::Packet<GyroHeader, f32> {
+        serial::Packet::new(
+            GyroHeader {
+                addr: self.addr,
+                cmd: req,
+            },
+            0f32,
+        )
+    }
 
-        let head = match client.send(packet) {
-            Ok(h) => h,
-            Err(_) => return Err(RequestError),
-        };
-
-        match serv.listen_for::<GyroHeader, f32>(head).await {
-            Ok(n) => Ok(n),
-            Err(_) => Err(RequestError),
-        }
+    /// produces a packet to request all fields of the `gyro::Controller`
+    /// struct.
+    #[inline]
+    #[must_use]
+    pub fn request_all(&self) -> [serial::Packet<GyroHeader, f32>; 6] {
+        [
+            self.request(Request::Yaw),
+            self.request(Request::Roll),
+            self.request(Request::Pitch),
+            self.request(Request::YawPerSec),
+            self.request(Request::RollPerSec),
+            self.request(Request::PitchPerSec),
+        ]
     }
 
     /// Sets the "zero" position of the gyro, all angle gotten after this will
@@ -166,14 +181,6 @@ impl Controller {
     pub fn pitch_per_sec(&self) -> Option<Angle> {
         self.pitch_per_sec
     }
-
-    /// Generates a header for the given command and gyro.
-    fn gen_header(&self, cmd: Request) -> GyroHeader {
-        GyroHeader {
-            addr: self.addr,
-            cmd,
-        }
-    }
 }
 
 pub type RequestResult<T> = Result<T, RequestError>;
@@ -209,7 +216,7 @@ impl Request {
 
 /// Represents packet headers used by the gyro.
 #[derive(Clone, Copy)]
-struct GyroHeader {
+pub struct GyroHeader {
     pub(crate) addr: u8,
     pub(crate) cmd: Request,
 }

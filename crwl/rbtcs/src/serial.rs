@@ -3,15 +3,11 @@
 // See LICENSE file in repository root for complete license text.
 
 use core::fmt;
-use gpio::{
-    sysfs::{SysFsGpioInput, SysFsGpioOutput},
-    GpioIn, GpioOut, GpioValue,
-};
+use gpio::{GpioIn, GpioOut, GpioValue};
 use std::{
     error::Error,
-    fmt::Display,
     io, mem,
-    sync::mpsc::{self, SendError, Sender},
+    sync::mpsc::{self, Receiver, SendError, Sender},
     thread,
     time::Duration,
 };
@@ -26,13 +22,13 @@ impl Client {
     pub fn new<T>(clock: T, data: T, cycle: Duration) -> Self
     where
         T: GpioOut + Send + 'static,
-        <T as GpioOut>::Error: Send + 'static,
+        <T as GpioOut>::Error: Send,
     {
-        // Kept outside the thread so we can return the error before spawning.
-        let mut sender = BitSender::new(clock, data, cycle);
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || -> Result<(), T::Error> {
+            let mut sender = BitSender::new(clock, data, cycle);
+
             loop {
                 let packet: SerialData = match rx.recv() {
                     Ok(p) => p,
@@ -51,17 +47,6 @@ impl Client {
         Self { tx }
     }
 
-    /// Creates a new serial client given the clock and data pins to use as a
-    /// serial bus.
-    #[must_use]
-    pub fn open(clock_pin: u16, data_pin: u16, clock_cycle: Duration) -> io::Result<Self> {
-        Ok(Client::new(
-            SysFsGpioOutput::open(clock_pin)?,
-            SysFsGpioOutput::open(data_pin)?,
-            clock_cycle,
-        ))
-    }
-
     /// Queues a packet for sending on the client thread. Returns the given
     /// packet's head on success. An `Err` value from this function means that
     /// the `Client` instance's thread has returned with an error, which would
@@ -69,6 +54,10 @@ impl Client {
     /// not necessarily mean the given `Packet` was successfuly sent over
     /// serial, only that it was successfully sent to the thread for that
     /// purpose.
+    ///
+    /// The order in which packets are sent using this function will not matter
+    /// unless they trigger a device to send a packet, in which case they may
+    /// require more careful timing.
     #[inline]
     pub fn send<U, V>(&mut self, packet: Packet<U, V>) -> Result<U, SendError<SerialData>>
     where
@@ -81,123 +70,63 @@ impl Client {
 }
 
 /// Responsible for recieving messages from the serial bus.
-pub struct Server<T>
-where
-    T: GpioIn,
-{
-    receiver: BitReceiver<T>,
+pub struct Server {
+    rx: Receiver<SerialData>,
+    backlog: Vec<Packet<(u8, u8), u32>>,
 }
 
-impl<T> Server<T>
-where
-    T: GpioIn,
-{
+impl Server {
     /// Creates a new `Server` given already opened `GpioIn` implementations.
-    pub fn new(clock: T, data: T) -> Self {
+    pub fn new<T>(clock: T, data: T) -> Self
+    where
+        T: GpioIn + Send + 'static,
+        <T as GpioIn>::Error: Send,
+    {
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || -> Result<(), T::Error> {
+            let mut receiver = BitReceiver::new(clock, data);
+
+            loop {
+                let rec = match receiver.recv(Packet::<(u8, u8), u32>::BITS as u8) {
+                    Some(p) => p,
+                    None => continue,
+                };
+
+                tx.send(rec).unwrap();
+            }
+        });
+
         Self {
-            receiver: BitReceiver::new(clock, data),
+            rx,
+            backlog: Vec::new(),
         }
     }
 
-    /// Listens for the start of a packet, upon finding one will read and return
-    /// a generic packet of type `Packet<(u8, u8), u32>`.
+    /// Gets a `Vec` of all packets that match the given header, an empty `Vec`
+    /// means that no packets matched the header, though this could be due to
+    /// errors from `<U as Header>::extract()` or `<V as Data>::extract()`
+    /// calls.
     #[must_use]
-    pub async fn listen(&mut self) -> ListenResult<Packet<(u8, u8), u32>> {
-        match self.receiver.recv(Packet::<(u8, u8), u32>::BITS as u8) {
-            Ok(packet) => match packet {
-                Some((v, _)) => {
-                    let addr = (v >> (u8::BITS + u32::BITS)) as u8;
-                    let cmd = (v >> u32::BITS) as u8;
-                    let data = v as u32;
-
-                    Ok(Packet::new((addr, cmd), data))
-                }
-
-                None => Err(ListenError),
-            },
-
-            Err(_) => Err(ListenError),
-        }
-    }
-
-    /// Listens for a packet with the given head and returns its data. Since all
-    /// recieved data is gotten by request any packet with a different header is
-    /// an error. Will block the current thread until the packet is recieved.
-    ///
-    /// # Arguments
-    ///
-    /// * `head` - Packet head to listen for.
-    #[must_use]
-    pub async fn listen_for<U, V>(&mut self, head: U) -> ListenResult<V>
+    pub fn get<T>(&mut self, head: T) -> Option<Packet<(u8, u8), u32>>
     where
-        U: Header,
-        V: Data,
+        T: Header,
     {
-        let recieved_packet = self.listen().await?;
-
-        // Since all recived data is made by request we should be recieving
-        // exactly the listened for header, anything else is an error.
-        if recieved_packet.head.get() != head.get() {
-            return Err(ListenError);
+        while let Ok(s) = self.rx.try_recv() {
+            match Packet::<(u8, u8), u32>::try_from(s) {
+                Ok(p) => self.backlog.push(p),
+                Err(_) => continue,
+            }
         }
 
-        match V::extract(&recieved_packet) {
-            Ok(v) => Ok(v),
-            Err(_) => Err(ListenError),
-        }
-    }
-
-    /// Listens for a packet with the given head and returns its data. Unlike
-    /// `serial::Server::listen_for()` this function will not return and error
-    /// if the expected head is not received and will instead continue to
-    /// listen. Will block the current thread until the packet is recieved.
-    ///
-    /// # Arguments
-    ///
-    /// * `head` - Packet head to listen for.
-    #[must_use]
-    pub async fn listen_until<U, V>(&mut self, head: U) -> ListenResult<V>
-    where
-        U: Header,
-        V: Data,
-    {
-        let mut recieved_packet = self.listen().await?;
-
-        // If we didnt get the head we wanted we just try again, and again, and
-        // again, and again...
-        while recieved_packet.head.get() != head.get() {
-            recieved_packet = self.listen().await?;
-        }
-
-        match V::extract(&recieved_packet) {
-            Ok(v) => Ok(v),
-            Err(_) => Err(ListenError),
-        }
-    }
-}
-
-impl Server<SysFsGpioInput> {
-    /// Instantiants a new `Server` given the clock and data pins of the serial
-    /// bus to read from.
-    #[inline]
-    #[must_use]
-    pub fn open(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
-        Ok(Self {
-            receiver: BitReceiver::<SysFsGpioInput>::open(clock_pin, data_pin)?,
-        })
-    }
-}
-
-pub type ListenResult<T> = Result<T, ListenError>;
-
-#[derive(Clone, Copy, Debug)]
-pub struct ListenError;
-
-impl Error for ListenError {}
-
-impl Display for ListenError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to receive, parse, or extract packet information")
+        self.backlog
+            .iter()
+            .filter(|p| match T::extract(p) {
+                Ok(v) => v.get() == head.get(),
+                Err(_) => false,
+            })
+            .map(|p| *p)
+            .last()
     }
 }
 
@@ -261,26 +190,6 @@ impl<T: GpioOut> BitSender<T> {
     }
 }
 
-impl BitSender<SysFsGpioOutput> {
-    /// Creates a new `BitSender` for sending data using the given clock and
-    /// data pins.
-    ///
-    /// # Arguments
-    ///
-    /// * `clock_pin` - Pin number of the clock pin.
-    /// * `data_pin` - Pin number of the data pin.
-    /// * `clock_cycle` - Delay between each clock change, up or down.
-    #[inline]
-    #[must_use]
-    pub fn open(clock_pin: u16, data_pin: u16, clock_cycle: Duration) -> io::Result<Self> {
-        Ok(Self {
-            clock: SysFsGpioOutput::open(clock_pin)?,
-            data: SysFsGpioOutput::open(data_pin)?,
-            cycle: clock_cycle,
-        })
-    }
-}
-
 /// Struct for receiving bits on a serial bus, since the instance belongs to the
 /// controller device all addresses in packets are the address of the sending
 /// device, not the recipiant.
@@ -302,18 +211,18 @@ impl<T: GpioIn> BitReceiver<T> {
     /// # Arguments
     ///
     /// * `size` - Size of the data to recieve in bits.
-    pub fn recv(&mut self, size: u8) -> Result<Option<SerialData>, T::Error> {
+    pub fn recv(&mut self, size: u8) -> Option<SerialData> {
         // Wait until we see a change from clock high data low.
-        while self.clock.read_value()? == GpioValue::High
-            && self.data.read_value()? == GpioValue::Low
+        while self.clock.read_value().ok()? == GpioValue::High
+            && self.data.read_value().ok()? == GpioValue::Low
         {}
 
         // The start of a read is stated with clock high data high, if this is
         // not the state after a no-read segment something's gone wrong.
-        if !(self.clock.read_value()? == GpioValue::High
-            && self.data.read_value()? == GpioValue::High)
+        if !(self.clock.read_value().ok()? == GpioValue::High
+            && self.data.read_value().ok()? == GpioValue::High)
         {
-            return Ok(None);
+            return None;
         }
 
         let mut packet_bits = 0u64;
@@ -324,31 +233,19 @@ impl<T: GpioIn> BitReceiver<T> {
             // On the first loop this does nothing.
             packet_bits <<= 1;
 
-            while self.clock.read_value()? == GpioValue::High {}
+            while self.clock.read_value().ok()? == GpioValue::High {}
 
             // OR in our new bit, if its zero then its already there.
-            if self.data.read_value()? == GpioValue::High {
+            if self.data.read_value().ok()? == GpioValue::High {
                 packet_bits |= 1u64;
             }
 
             // Wait until the clock goes back to high to prevent reading the
             // same vaue twice.
-            while self.clock.read_value()? == GpioValue::Low {}
+            while self.clock.read_value().ok()? == GpioValue::Low {}
         }
 
-        Ok(Some((packet_bits, size)))
-    }
-}
-
-impl BitReceiver<SysFsGpioInput> {
-    /// Produces a new `BitReceiver` given the clock and data pins to read from.
-    #[inline]
-    #[must_use]
-    pub fn open(clock_pin: u16, data_pin: u16) -> io::Result<Self> {
-        let clock = SysFsGpioInput::open(clock_pin)?;
-        let data = SysFsGpioInput::open(data_pin)?;
-
-        Ok(Self { clock, data })
+        Some((packet_bits, size))
     }
 }
 
@@ -379,7 +276,7 @@ where
     /// Creates a new packet given a `Header` and `Data`.
     #[inline]
     #[must_use]
-    pub fn new(head: T, data: U) -> Self {
+    pub const fn new(head: T, data: U) -> Self {
         Self { head, data }
     }
 
@@ -417,6 +314,14 @@ where
         let data = v as u32;
 
         Packet::new((addr, cmd), data)
+    }
+
+    pub fn parse_into(serial_data: SerialData) -> ExtractionResult<Packet<T, U>> {
+        let p = Self::parse(serial_data);
+        Ok(Self {
+            head: T::extract(&p)?,
+            data: U::extract(&p)?,
+        })
     }
 }
 
@@ -616,23 +521,106 @@ pub trait Data: Clone + Copy {
     fn get(&self) -> u32;
 }
 
+/// Fake `GpioIn` for testing, a custom one rather than `DummyGpioIn` because
+/// the provided one does not work very well over threads.
+pub struct TestGpioIn {
+    rx: Receiver<GpioValue>,
+    state: GpioValue,
+}
+
+impl TestGpioIn {
+    /// Creates a new test input gpio pin.
+    ///
+    /// # Arguments
+    ///
+    /// * `rx` - An `mpsc::Receiver<GpioValue>` linked to an output pin.
+    /// * `state` - State assumed before anything is received.
+    pub fn new(rx: Receiver<GpioValue>, state: GpioValue) -> Self {
+        Self { rx, state }
+    }
+}
+
+impl GpioIn for TestGpioIn {
+    /// This error is not used, this implementation will never return an error.
+    type Error = io::Error;
+
+    fn read_value(&mut self) -> Result<GpioValue, Self::Error> {
+        let v = self.rx.try_recv().unwrap_or(self.state);
+        self.state = v;
+        Ok(v)
+    }
+}
+
+/// Fake `GpioOut` for testing, a custom one rather than `DummyGpioOut` because
+/// the provided one does not work very well over threads.
+pub struct TestGpioOut {
+    tx: Sender<GpioValue>,
+}
+
+impl TestGpioOut {
+    /// Creates a new test output gpio pin.
+    ///
+    /// # Arguments
+    ///
+    /// * `rx` - An `mpsc::Sender<GpioValue>` linked to an input pin.
+    pub fn new(tx: Sender<GpioValue>) -> Self {
+        Self { tx }
+    }
+}
+
+impl GpioOut for TestGpioOut {
+    type Error = mpsc::SendError<GpioValue>;
+
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        self.tx.send(GpioValue::Low)
+    }
+
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        self.tx.send(GpioValue::High)
+    }
+}
+
 /// Represents a binary representation of data that can be send via serial.
 pub type SerialData = (u64, u8);
 
 #[cfg(test)]
 mod tests {
-    use super::{BitReceiver, BitSender, Packet};
-    use gpio::{
-        dummy::{DummyGpioIn, DummyGpioOut},
-        GpioIn, GpioValue,
-    };
-    use std::{
-        error::Error,
-        f32,
-        sync::{Arc, RwLock},
-        thread,
-        time::Duration,
-    };
+    use super::{BitReceiver, BitSender, Client, Packet, Server, TestGpioIn, TestGpioOut};
+    use gpio::GpioValue;
+    use std::{f32, sync::mpsc, thread, time::Duration};
+
+    #[test]
+    pub fn serv_and_client() {
+        let packets = [
+            Packet::new((1u8, 255u8), 314u32),
+            Packet::new((5u8, 255u8), f32::consts::PI.to_bits()),
+        ];
+
+        let (clock_tx, clock_rx) = mpsc::channel();
+        let (data_tx, data_rx) = mpsc::channel();
+
+        let mut server = Server::new(
+            TestGpioIn::new(clock_rx, GpioValue::Low),
+            TestGpioIn::new(data_rx, GpioValue::Low),
+        );
+
+        let mut client = Client::new(
+            TestGpioOut::new(clock_tx),
+            TestGpioOut::new(data_tx),
+            Duration::from_millis(2),
+        );
+
+        for p in packets {
+            client.send(p).unwrap();
+
+            // This sleep is very important, since we need to wait for the
+            // `Server` to get the packet and receive it from its own listening
+            // thread.
+            thread::sleep(Duration::from_millis(200));
+
+            assert_eq!(p.get(), server.get(p.head).unwrap());
+        }
+    }
 
     #[test]
     pub fn send_and_recv() {
@@ -641,84 +629,55 @@ mod tests {
             Packet::new((5u8, 255u8), f32::consts::PI.to_bits()),
         ];
 
-        // Value of the clock and data pins, stored in memory for the dummy gpio
-        // inputs/outputs to interact with.
-        let clock_val = Arc::new(RwLock::new(GpioValue::Low));
-        let data_val = Arc::new(RwLock::new(GpioValue::Low));
-
-        // Clones of the pin value ARCs for use within the recieving thread.
-        let clock_val_recv = clock_val.clone();
-        let data_val_recv = data_val.clone();
+        let (clock_tx, clock_rx) = mpsc::channel();
+        let (data_tx, data_rx) = mpsc::channel();
 
         // Clones of the packets to be check against within the thread.
         let packets_recv = packets.clone();
 
-        let handle = thread::spawn(
-            move || -> Result<Vec<Packet<(u8, u8), u32>>, <DummyGpioIn<&dyn Fn() -> GpioValue> as GpioIn>::Error> {
-                let clock_read = move || {
-                    let v = *clock_val_recv.read().unwrap();
-                    // println!("read clock pin to be {:?}", v);
-                    v
-                };
+        let handle = thread::spawn(move || -> Vec<Packet<(u8, u8), u32>> {
+            let mut reciever = BitReceiver::new(
+                TestGpioIn::new(clock_rx, GpioValue::High),
+                TestGpioIn::new(data_rx, GpioValue::Low),
+            );
 
-                let data_read = move || {
-                    let v = *data_val_recv.read().unwrap();
-                    println!("read data pin to be {:?}", v);
-                    v
-                };
+            let mut packets: Vec<Packet<(u8, u8), u32>> = Vec::new();
 
-                let mut reciever = BitReceiver::new(
-                    DummyGpioIn::new(&clock_read as &dyn Fn() -> GpioValue),
-                    DummyGpioIn::new(&data_read as &dyn Fn() -> GpioValue),
-                );
+            for p in packets_recv {
+                packets.push(match reciever.recv(Packet::<(u8, u8), u32>::BITS as u8) {
+                    Some(p) => match Packet::<(u8, u8), u32>::try_from(p) {
+                        Ok(v) => v,
+                        Err(_) => panic!("could not interperet packet from serial data"),
+                    },
+                    None => panic!("recieved none for {:?}", p),
+                });
+            }
 
-                let mut packets: Vec<Packet<(u8, u8), u32>> = Vec::new();
-
-                for p in packets_recv {
-                    packets.push(match reciever.recv(Packet::<(u8, u8), u32>::BITS as u8)? {
-                        Some(p) => match Packet::<(u8, u8), u32>::try_from(p) {
-                            Ok(v) => v,
-                            Err(_) => panic!("could not interperet packet from serial data"),
-                        },
-                        None => panic!("recieved none for {:?}", p),
-                    });
-                }
-
-                Ok(packets)
-            },
-        );
-
-        let clock_set = |v| {
-            let mut val = clock_val.write().unwrap();
-            // println!("clock pin set to {:?}", v);
-            *val = v;
-        };
-
-        let data_set = |v| {
-            let mut val = data_val.write().unwrap();
-            println!("data pin set to {:?}", v);
-            *val = v;
-        };
+            packets
+        });
 
         // Two milliseconds could be a bit fast for some hardware, but even one
         // millisecond works for me so I'll leave it for now to speed up unit
         // test runs.
         let mut sender = BitSender::new(
-            DummyGpioOut::new(&clock_set as &dyn Fn(GpioValue)),
-            DummyGpioOut::new(&data_set as &dyn Fn(GpioValue)),
+            TestGpioOut::new(clock_tx),
+            TestGpioOut::new(data_tx),
             Duration::from_millis(2),
         );
 
         sender.start().unwrap();
 
-        // Just to make sure we dont send before listening.
-        thread::sleep(Duration::from_millis(500));
-
         for p in packets {
-            sender.send(p.into()).unwrap();
+            // We ignore the error here because the `BitSender`, after each
+            // piece of `SerialData` is sent, resets the pins to a "no read"
+            // state. By the time this happens the `BitReceiver` has alreday
+            // stopped listening and in this unit test, is dropped, causing the
+            // `mpsc::Receiver` to drop as well, producing an error in the last
+            // pin sets and this error is of no consequence to us.
+            sender.send(p.into()).unwrap_or_default();
         }
 
-        let read_packets = handle.join().unwrap().unwrap();
+        let read_packets = handle.join().unwrap();
 
         for i in 0..packets.len() {
             assert_eq!(packets[i].get(), read_packets[i].get());

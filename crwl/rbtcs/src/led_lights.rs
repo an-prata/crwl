@@ -2,6 +2,8 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
+use aprox_eq::AproxEq;
+
 use crate::serial;
 
 /// Represents an LED light controller on the serial bus.
@@ -21,8 +23,9 @@ impl Controller {
     /// Sets the color of the LED lights.
     #[inline]
     #[must_use]
-    pub fn set_color(&mut self, color: Color) {
+    pub fn set_color(&mut self, color: Color) -> serial::Packet<LedHeader, Color> {
         self.color = Some(color);
+        self.gen_packet()
     }
 
     /// Generates a `serial::Packet<LedHeader>` for sending using a
@@ -173,7 +176,7 @@ impl Color {
             return (0f32, 0f32, 0f32);
         }
 
-        let s = 360f32 * (max - min) / max;
+        let s = (max - min) / max;
 
         if s == 0f32 {
             return (0f32, 0f32, max);
@@ -204,6 +207,13 @@ impl serial::Data for Color {
 
     fn get(&self) -> u32 {
         self.gen_u32()
+    }
+}
+
+impl AproxEq for Color {
+    fn aprox_eq(&self, other: &Self) -> bool {
+        let (a, b) = (self.rgb(), other.rgb());
+        a.0.aprox_eq(&b.0) && a.1.aprox_eq(&b.1) && a.2.aprox_eq(&b.2)
     }
 }
 
@@ -240,4 +250,45 @@ impl serial::Header for LedHeader {
 #[derive(Clone, Copy, Debug)]
 pub enum LedCommand {
     Set = 1u8,
+}
+
+#[cfg(test)]
+mod tests {
+    use aprox_eq::assert_aprox_eq;
+
+    use super::Color;
+
+    #[test]
+    pub fn hsv_to_rgb() {
+        let color_pairs = [
+            (
+                Color::from_rgb(1f32, 0f32, 0f32),
+                Color::from_hsv(0f32, 1f32, 1f32),
+            ),
+            (
+                Color::from_rgb(0f32, 1f32, 0f32),
+                Color::from_hsv(120f32, 1f32, 1f32),
+            ),
+            (
+                Color::from_rgb(0f32, 0f32, 1f32),
+                Color::from_hsv(240f32, 1f32, 1f32),
+            ),
+            (
+                Color::from_rgb(0.5f32, 0.5f32, 0.5f32),
+                Color::from_hsv(0f32, 0f32, 0.5f32),
+            ),
+        ];
+
+        for (rgb, hsv) in color_pairs {
+            assert_aprox_eq!(rgb, hsv);
+
+            assert_aprox_eq!(rgb.rgb().0, hsv.rgb().0);
+            assert_aprox_eq!(rgb.rgb().1, hsv.rgb().1);
+            assert_aprox_eq!(rgb.rgb().2, hsv.rgb().2);
+
+            assert_aprox_eq!(rgb.hsv().0, hsv.hsv().0);
+            assert_aprox_eq!(rgb.hsv().1, hsv.hsv().1);
+            assert_aprox_eq!(rgb.hsv().2, hsv.hsv().2);
+        }
+    }
 }
