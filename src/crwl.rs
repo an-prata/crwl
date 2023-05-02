@@ -190,15 +190,9 @@ impl bot::Bot for Crwl {
         {
             Ok(_) => Ok(bot::State::Enabled(Some(time))),
             Err(_) => {
-                self.log
-                    .log(log::Line::Err(String::from(
-                        "serial: could not send motor speeds",
-                    )))
-                    .unwrap();
-
-                Err(bot::BotError::new(String::from(
-                    "could not send motor speeds over serial",
-                )))
+                let msg = String::from("serial: could not send motor speeds");
+                self.log.log(log::Line::Err(msg.clone())).unwrap();
+                Err(bot::BotError::new(msg))
             }
         }
     }
@@ -218,7 +212,7 @@ impl bot::Bot for Crwl {
         serial_tx: &mut rbtcs::serial::Client,
         _serial_rx: &mut rbtcs::serial::Server,
     ) -> bot::BotResult<bot::State> {
-        match mecanum::DriveState::from(mecanum::DriveVector::from_3_axes(0f64, 0f64, 0f64))
+        match mecanum::DriveSpeeds::from(mecanum::DriveVector::from_3_axes(0f64, 0f64, 0f64))
             .speeds
             .iter()
             .zip(0..self.motors.len())
@@ -233,15 +227,9 @@ impl bot::Bot for Crwl {
         {
             Ok(_) => Ok(bot::State::Disabled(Some(time))),
             Err(_) => {
-                self.log
-                    .log(log::Line::Err(String::from(
-                        "serial: could not send motor speeds",
-                    )))
-                    .unwrap();
-
-                Err(bot::BotError::new(String::from(
-                    "could not send motor speeds over serial",
-                )))
+                let msg = String::from("serial: could not send motor speeds");
+                self.log.log(log::Line::Err(msg.clone())).unwrap();
+                Err(bot::BotError::new(msg))
             }
         }
     }

@@ -80,15 +80,15 @@ impl DriveVector {
 
 /// Represents a single frame of the drive train's state and holds data for all
 /// four motors/wheels.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct DriveState {
-    /// Motor speeds arranges going counter clockwise starting at the front
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DriveSpeeds {
+    /// Motor speeds arranged going counter clockwise starting at the front
     /// right motor: fr, fl, bl, br.
-    pub speeds: Vec<f64>,
+    pub speeds: [f64; 4],
 }
 
-impl DriveState {
-    /// Creates a `DriveState` to achieve the given `DriveVector`.
+impl DriveSpeeds {
+    /// Creates a `DriveSpeed` to achieve the given `DriveVector`.
     #[must_use]
     pub fn new(vec: DriveVector) -> Self {
         Self {
@@ -98,14 +98,12 @@ impl DriveState {
                 f64::sin((vec.angle + BL_ANG).radians()) * vec.magnitude + vec.rotation,
                 f64::sin((vec.angle + BR_ANG).radians()) * vec.magnitude - vec.rotation,
             ]
-            .iter()
-            .map(|x| x.clamp(-1f64, 1f64))
-            .collect(),
+            .map(|x| x.clamp(-1f64, 1f64)),
         }
     }
 }
 
-impl AproxEq for DriveState {
+impl AproxEq for DriveSpeeds {
     fn aprox_eq(&self, other: &Self) -> bool {
         self.speeds
             .iter()
@@ -114,7 +112,7 @@ impl AproxEq for DriveState {
     }
 }
 
-impl From<DriveVector> for DriveState {
+impl From<DriveVector> for DriveSpeeds {
     fn from(value: DriveVector) -> Self {
         Self::new(value)
     }
@@ -122,7 +120,7 @@ impl From<DriveVector> for DriveState {
 
 /// Creates a new `DriveVector` from the given translation speeds and
 /// rotation, all values should be between -1 and 1. From that `DriveVector` a
-/// `DriveState` is then created to achieve it.
+/// `DriveSpeeds` is then created to achieve it.
 ///
 /// # Arguments
 ///
@@ -135,14 +133,14 @@ pub fn calc_3_axis_drive(
     translation_x: f64,
     translation_y: f64,
     rotation: f64,
-) -> (DriveVector, DriveState) {
+) -> (DriveVector, DriveSpeeds) {
     let vec = DriveVector::from_3_axes(translation_x, translation_y, rotation);
-    (vec, DriveState::new(vec))
+    (vec, DriveSpeeds::new(vec))
 }
 
 /// Creates a new `DriveVector` from the given point, rotation speed, and
-/// translation speed. From that `DriveVector` a `DriveState` is then created to
-/// achieve it.
+/// translation speed. From that `DriveVector` a `DriveSpeeds` is then created
+/// to achieve it.
 ///
 /// # Arguments
 ///
@@ -152,14 +150,14 @@ pub fn calc_3_axis_drive(
 /// * `speed` - Translation speed, does not affect rotation.
 #[inline]
 #[must_use]
-pub fn calc_4_axis_drive(x: f64, y: f64, rotation: f64, speed: f64) -> (DriveVector, DriveState) {
+pub fn calc_4_axis_drive(x: f64, y: f64, rotation: f64, speed: f64) -> (DriveVector, DriveSpeeds) {
     let vec = DriveVector::from_4_axes(x, y, rotation, speed);
-    (vec, DriveState::new(vec))
+    (vec, DriveSpeeds::new(vec))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DriveState, DriveVector};
+    use super::{DriveSpeeds, DriveVector};
     use aprox_eq::assert_aprox_eq;
 
     #[test]
@@ -196,7 +194,7 @@ mod tests {
 
                     while r <= 1f64 {
                         let vec = DriveVector::from_4_axes(x, y, r, s);
-                        let state = DriveState::new(vec);
+                        let state = DriveSpeeds::new(vec);
 
                         assert!(state.speeds.iter().any(|x| x.abs() <= 1f64));
 

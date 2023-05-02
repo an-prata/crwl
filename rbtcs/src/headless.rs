@@ -4,7 +4,7 @@
 
 use crate::{
     angle::Angle,
-    mecanum::{DriveState, DriveVector},
+    mecanum::{DriveSpeeds, DriveVector},
 };
 
 /// Represents a drive mode, namely the drive's frame of reference for controls.
@@ -30,14 +30,14 @@ pub fn calc_3_axis_headless(
     translation_y: f64,
     rotation: f64,
     gyro_angle: Angle,
-) -> (DriveVector, DriveState) {
+) -> (DriveVector, DriveSpeeds) {
     let vec = DriveVector {
         angle: Angle::from_radians(f64::atan2(translation_y, translation_x)) - gyro_angle,
         magnitude: f64::sqrt(f64::powi(translation_x, 2) + f64::powi(translation_y, 2)),
         rotation,
     };
 
-    (vec, DriveState::new(vec))
+    (vec, DriveSpeeds::new(vec))
 }
 
 /// Creates a new `DriveVector` from the given point, rotation speed, and
@@ -58,12 +58,12 @@ pub fn calc_4_axis_headless(
     rotation: f64,
     speed: f64,
     gyro_angle: Angle,
-) -> (DriveVector, DriveState) {
+) -> (DriveVector, DriveSpeeds) {
     let vec = DriveVector {
         angle: Angle::from_radians(f64::atan2(y, x)) - gyro_angle,
         magnitude: speed,
         rotation,
     };
 
-    (vec, DriveState::new(vec))
+    (vec, DriveSpeeds::new(vec))
 }
