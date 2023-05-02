@@ -5,6 +5,7 @@
 use aprox_eq::AproxEq;
 use std::{
     f64,
+    fmt::{self, Display, Formatter},
     ops::{Add, Div, Mul, Sub},
 };
 
@@ -92,6 +93,60 @@ impl Div<f64> for Angle {
     fn div(self, other: f64) -> Self {
         Angle {
             fraction: (self.fraction / other) % 1f64,
+        }
+    }
+}
+
+impl Display for Angle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}° / {}π / {}τ",
+            self.degrees(),
+            self.fraction * 2f64,
+            self.fraction
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Angle;
+    use aprox_eq::assert_aprox_eq;
+    use std::f64;
+
+    #[test]
+    pub fn conversions() {
+        let vals = [
+            (0f64, 0f64, 0f64),
+            (90f64, f64::consts::PI / 2f64, 0.25f64),
+            (180f64, f64::consts::PI, 0.5f64),
+            (270f64, f64::consts::PI * 1.5f64, 0.75f64),
+        ];
+
+        for (deg, rad, dec) in vals {
+            let ang_deg = Angle::from_degrees(deg);
+            let ang_rad = Angle::from_radians(rad);
+            let ang_dec = Angle { fraction: dec };
+
+            assert_aprox_eq!(ang_deg, ang_rad);
+            assert_aprox_eq!(ang_rad, ang_dec);
+            assert_aprox_eq!(ang_dec, ang_deg);
+        }
+    }
+
+    #[test]
+    pub fn single_rotation() {
+        let angles = [
+            Angle::from_radians(f64::consts::PI * 3f64),
+            Angle::from_degrees(361f64),
+            Angle::from_point(1f64, 2f64),
+            Angle::from_point(0f64, 0f64),
+            Angle::from_radians(f64::consts::TAU + 1f64.powi(-10)),
+        ];
+
+        for a in angles {
+            assert!(a.fraction < 1f64);
         }
     }
 }
