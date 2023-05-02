@@ -20,7 +20,7 @@ pub struct Crwl {
 }
 
 impl Crwl {
-    /// Odered from the front right counter clockwise: fr, fl, bl, br.
+    /// Ordered from the front right counter clockwise: fr, fl, bl, br.
     const MOTOR_ADDRS: [u8; 4] = [1u8, 2u8, 3u8, 4u8];
 
     const GYRO_ADDR: u8 = 5u8;
