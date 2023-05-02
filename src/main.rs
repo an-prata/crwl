@@ -3,7 +3,6 @@
 // See LICENSE file in repository root for complete license text.
 
 mod crwl;
-mod gp;
 mod log;
 
 use rbtcs::bot;
