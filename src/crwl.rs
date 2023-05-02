@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
+use crate::log;
 use gilrs::{Button, GamepadId};
 use rbtcs::{
     bot, gyro,
@@ -15,27 +16,25 @@ pub struct Crwl {
     drive_mode: DriveMode,
     gyro: gyro::Controller,
     leds: led_lights::Controller,
+    log: log::Logger,
 }
 
 impl Crwl {
-    const FR_ADDR: u8 = 1u8;
-    const FL_ADDR: u8 = 2u8;
-    const BR_ADDR: u8 = 3u8;
-    const BL_ADDR: u8 = 4u8;
+    /// Odered from the front right counter clockwise: fr, fl, bl, br.
+    const MOTOR_ADDRS: [u8; 4] = [1u8, 2u8, 3u8, 4u8];
+
     const GYRO_ADDR: u8 = 5u8;
     const LED_ADDR: u8 = 6u8;
 
+    const LOG_PATH: &str = "~/crwl.log";
+
     pub fn new() -> Self {
         Self {
-            motors: [
-                motor::Controller::new(Self::FR_ADDR),
-                motor::Controller::new(Self::FL_ADDR),
-                motor::Controller::new(Self::BL_ADDR),
-                motor::Controller::new(Self::BR_ADDR),
-            ],
+            motors: Self::MOTOR_ADDRS.map(|a| motor::Controller::new(a)),
             drive_mode: DriveMode::Relative,
             gyro: gyro::Controller::new(Self::GYRO_ADDR),
             leds: led_lights::Controller::new(Self::LED_ADDR),
+            log: log::Logger::new(Self::LOG_PATH).unwrap(),
         }
     }
 }
@@ -101,14 +100,43 @@ impl bot::Bot for Crwl {
             match event.event {
                 gilrs::EventType::ButtonReleased(Button::LeftThumb, _) => {
                     self.drive_mode = match self.drive_mode {
-                        DriveMode::Headless(_) => DriveMode::Relative,
+                        DriveMode::Headless(_) => {
+                            self.log
+                                .log(log::Line::Info(String::from("drive mode: relative")))
+                                .unwrap();
+
+                            DriveMode::Relative
+                        }
+
                         DriveMode::Relative => match self.gyro.yaw() {
-                            Some(v) => DriveMode::Headless(v),
-                            None => DriveMode::Relative,
+                            Some(v) => {
+                                self.log
+                                    .log(log::Line::Info(format!("drive mode: headless @ {}", v)))
+                                    .unwrap();
+
+                                DriveMode::Headless(v)
+                            }
+                            None => {
+                                self.log
+                                    .log(log::Line::Warn(String::from(
+                                        "drive mode: attempted to set headless with angle `None`",
+                                    )))
+                                    .unwrap();
+
+                                DriveMode::Relative
+                            }
                         },
                     }
                 }
-                gilrs::EventType::ButtonReleased(Button::Start, _) => self.gyro.zero(),
+
+                gilrs::EventType::ButtonReleased(Button::Start, _) => {
+                    self.log
+                        .log(log::Line::Info(String::from("gyro: zeroed angles")))
+                        .unwrap();
+
+                    self.gyro.zero()
+                }
+
                 _ => (),
             }
         }
@@ -161,9 +189,17 @@ impl bot::Bot for Crwl {
         .collect::<Result<Vec<_>, _>>()
         {
             Ok(_) => Ok(bot::State::Enabled(Some(time))),
-            Err(_) => Err(bot::BotError::new(String::from(
-                "could not send motor speeds over serial",
-            ))),
+            Err(_) => {
+                self.log
+                    .log(log::Line::Err(String::from(
+                        "serial: could not send motor speeds",
+                    )))
+                    .unwrap();
+
+                Err(bot::BotError::new(String::from(
+                    "could not send motor speeds over serial",
+                )))
+            }
         }
     }
 
@@ -196,9 +232,17 @@ impl bot::Bot for Crwl {
             .collect::<Result<Vec<_>, _>>()
         {
             Ok(_) => Ok(bot::State::Disabled(Some(time))),
-            Err(_) => Err(bot::BotError::new(String::from(
-                "could not disable motors over serial",
-            ))),
+            Err(_) => {
+                self.log
+                    .log(log::Line::Err(String::from(
+                        "serial: could not send motor speeds",
+                    )))
+                    .unwrap();
+
+                Err(bot::BotError::new(String::from(
+                    "could not send motor speeds over serial",
+                )))
+            }
         }
     }
 
