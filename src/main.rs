@@ -4,6 +4,7 @@
 
 mod crwl;
 mod log;
+mod server;
 
 use rbtcs::bot;
 

@@ -5,10 +5,12 @@
 use std::{
     error, fs,
     io::{self, Write},
+    sync::mpsc::{self, Receiver, Sender},
 };
 
 /// For logging messages of varying severity.
 pub struct Logger {
+    rx: Vec<Receiver<Line>>,
     displaying: Line,
     file: fs::File,
 }
@@ -19,6 +21,7 @@ impl Logger {
     #[must_use]
     pub fn new(file_path: &str) -> io::Result<Self> {
         Ok(Self {
+            rx: Vec::new(),
             displaying: Line::Info(String::new()),
             file: fs::File::create(file_path)?,
         })
@@ -70,11 +73,34 @@ impl Logger {
     pub fn display(&mut self, line_type: Line) {
         self.displaying = line_type;
     }
+
+    /// Logs all `Line` instances queued by `Sender` instances returned from
+    /// `Log::branch()`.
+    #[inline]
+    pub fn log_queued(&mut self) {
+        for rx in self.rx {
+            for line in rx.try_iter() {
+                self.log(line);
+            }
+        }
+    }
+
+    /// Produces a channel for sending `Line` instances, stores the `Receiver`,
+    /// and returns the `Sender`. Using this sender will queue `Line` instances
+    /// for logging on a `Log::log_queued()` call.
+    #[inline]
+    #[must_use]
+    pub fn branch(&mut self) -> Sender<Line> {
+        let (tx, rx) = mpsc::channel();
+        self.rx.push(rx);
+        tx
+    }
 }
 
 /// Represents a single line in the log, different types are displayed slightly
 /// different.
 #[repr(u8)]
+#[derive(Clone)]
 pub enum Line {
     /// A recoverable error.
     Err(String) = 2,
