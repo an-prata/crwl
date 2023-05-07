@@ -76,6 +76,22 @@ impl Server {
             should_stop,
         })
     }
+
+    pub fn set_state<T>(&mut self, state: T) -> ServerResult<()>
+    where
+        T: serde::Serialize,
+    {
+        let state = match serde_json::to_string(&state) {
+            Ok(v) => v,
+            Err(_) => return Err(ServerError::SerdeError),
+        };
+
+        match self.tx.send(state) {
+            Ok(_) => (),
+            Err(_) => return Err(ServerError::MpscError),
+        };
+        Ok(())
+    }
 }
 
 /// Sends the current robot state as given to the function and returns a desired
@@ -109,7 +125,6 @@ pub type ServerResult<T> = Result<T, ServerError>;
 pub enum ServerError {
     TcpError,
     SerdeError,
-    StrError,
     MpscError,
 }
 
