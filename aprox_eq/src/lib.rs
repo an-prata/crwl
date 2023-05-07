@@ -12,11 +12,15 @@ pub use aprox_derive::AproxEq;
 ///
 /// ## Derivable
 ///
-/// This trait can be derived, doing so implements `aprox_eq()` so that it
+/// This trait can be derived, doing so implements [`aprox_eq()`] so that it
 /// compares all fields of the two structs, if one field is not aproximately
 /// equal then neither is the struct. This requires that all fields also
-/// implement `AproxEq`. The default implementation of `aprox_ne()` is used
-/// if `AproxEq` is derived.
+/// implement [`AproxEq`]. The default implementation of [`aprox_ne()`] is used
+/// if [`AproxEq`] is derived.
+///
+/// [`AproxEq`]: AproxEq
+/// [`aprox_eq()`]: AproxEq::aprox_eq()
+/// [`aprox_ne()`]: AproxEq::aprox_ne()
 pub trait AproxEq<T = Self>
 where
     T: ?Sized,
@@ -44,8 +48,10 @@ where
     #[must_use]
     fn aprox_eq(&self, other: &T) -> bool;
 
-    /// Returns true if not aproximately equal, simple negation of `aprox_eq()`
-    /// by default.
+    /// Returns true if not aproximately equal, simple negation of
+    /// [`aprox_eq()`] by default.
+    ///
+    /// [`aprox_eq()`]: AproxEq::aprox_eq()
     ///
     /// # Examples
     ///
@@ -66,8 +72,15 @@ where
     }
 }
 
-/// Behaves exactly like `assert_eq!` but calls on the `aprox_eq()` function as
-/// provided by the `AproxEq` trait instead of `eq()`.
+/// Behaves exactly like [`assert_eq`] but calls on the [`aprox_eq()`] function
+/// as provided by the [`AproxEq`] trait instead of [`eq()`] as provided by
+/// [`PartialEq`].
+///
+/// [`assert_eq`]: assert_eq
+/// [`aprox_eq()`]: AproxEq::aprox_eq()
+/// [`AproxEq`]: AproxEq
+/// [`eq()`]: PartialEq::eq()
+/// [`PartialEq`]: PartialEq
 #[macro_export]
 macro_rules! assert_aprox_eq {
     ($left:expr, $right:expr) => {
@@ -80,8 +93,13 @@ macro_rules! assert_aprox_eq {
     };
 }
 
-/// Behaves exactly like `assert_ne!` but calls on the `aprox_ne()` function as
-/// provided by the `AproxEq` trait instead of `ne()`.
+/// Behaves exactly like [`assert_ne`] but calls on the [`aprox_ne()`] function
+/// as provided by the [`AproxEq`] trait instead of [`ne()`].
+///
+/// [`assert_ne`]: assert_ne
+/// [`aprox_ne()`]: AproxEq::aprox_ne()
+/// [`AproxEq`]: AproxEq
+/// [`ne()`]: PartialEq::ne()
 #[macro_export]
 macro_rules! assert_aprox_ne {
     ($left:expr, $right:expr) => {
