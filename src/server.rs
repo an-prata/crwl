@@ -90,6 +90,7 @@ impl Server {
             Ok(_) => (),
             Err(_) => return Err(ServerError::MpscError),
         };
+
         Ok(())
     }
 }
