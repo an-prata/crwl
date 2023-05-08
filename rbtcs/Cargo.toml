@@ -6,13 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+aprox_eq = "1.1.0"
 gpio = "0.4.1"
 gilrs = "0.10.1"
 
-[dependencies.aprox_eq]
-path = "../aprox_eq"
-version = "0.1"
-
-[dependencies.aprox_derive]
-path = "../aprox_derive"
-version = "0.1"
