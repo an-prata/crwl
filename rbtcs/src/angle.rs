@@ -112,7 +112,7 @@ impl Display for Angle {
 #[cfg(test)]
 mod tests {
     use super::Angle;
-    use aprox_eq::assert_aprox_eq;
+    use aprox_eq::{assert_aprox_eq, assert_aprox_ne};
     use std::f64;
 
     #[test]

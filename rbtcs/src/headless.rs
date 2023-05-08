@@ -14,10 +14,13 @@ pub enum DriveMode {
     Relative,
 }
 
-/// Creates a new `DriveVector` from the given translation speeds and rotation,
-/// all values should be between -1 and 1. From that `DriveVector` a
-/// `DriveState` is then created to achieve it. Uses the given gyro angle to
+/// Creates a new [`DriveVector`] from the given translation speeds and
+/// rotation, all values should be between -1 and 1. From that [`DriveVector`] a
+/// [`DriveSpeeds`] is then created to achieve it. Uses the given gyro angle to
 /// make the drive move relative to the driver.
+///
+/// [`DriveVector`]: DriveVector
+/// [`DriveSpeeds`]: DriveSpeeds
 ///
 /// # Arguments
 ///
@@ -25,6 +28,31 @@ pub enum DriveMode {
 /// * `translation_y` - The translation speed along the y axis.
 /// * `rotation` - Speed of rotation, positive is clockwise.
 /// * `gyro_angle` - Current angle of the robot.
+///
+/// # Examples
+///
+/// ```
+/// use std::f64;
+/// use aprox_eq::{
+///     assert_aprox_eq,
+///     assert_aprox_ne,
+/// };
+/// use rbtcs::{
+///     headless,
+///     angle::Angle,
+/// };
+///
+/// // This would move straight forwards normally.
+/// let x = 0f64;
+/// let y = 1f64;
+///
+/// // By adding this angle we will make the robot move to the right.
+/// let gyro_angle = Angle::from_radians(f64::consts::PI / 2f64);
+///
+/// let (vec, _) = headless::calc_3_axis_headless(x, y, 0f64, gyro_angle);
+///
+/// assert_aprox_eq!(vec.angle, Angle::from_radians(0f64));
+/// ```
 pub fn calc_3_axis_headless(
     translation_x: f64,
     translation_y: f64,
