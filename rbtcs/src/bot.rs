@@ -41,7 +41,7 @@ where
 
 impl<T, U> BotRunner<T, U>
 where
-    T: Bot + Send,
+    T: Bot,
     U: GpioOut + Send + 'static,
     <U as GpioOut>::Error: Debug + Send,
 {
