@@ -2,12 +2,4 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-pub mod angle;
-pub mod bot;
-pub mod gyro;
-pub mod headless;
-pub mod led_lights;
-pub mod mecanum;
-pub mod motor;
-pub mod serial;
-pub mod vision;
+pub mod cam_server;
