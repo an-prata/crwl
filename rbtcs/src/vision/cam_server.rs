@@ -6,14 +6,15 @@ use image::ImageBuffer;
 use nokhwa::FormatDecoder;
 use nokhwa::{self, pixel_format::RgbFormat};
 use std::net::Shutdown;
+use std::sync::mpsc::SendError;
 use std::{
     io::{self, Write},
     net::{Ipv4Addr, SocketAddrV4, TcpListener},
     sync::mpsc::{self, RecvError, Sender},
-    thread::{self, JoinHandle},
+    thread,
 };
 
-struct CameraServer {
+pub struct CameraServer {
     tx: Sender<ImageBuffer<<RgbFormat as FormatDecoder>::Output, Vec<u8>>>,
 }
 
@@ -31,9 +32,8 @@ impl CameraServer {
 
             loop {
                 if connection.is_none() {
-                    match listener.accept() {
-                        Ok((stream, _)) => connection = Some(stream),
-                        Err(_) => (),
+                    if let Ok((stream, _)) = listener.accept() {
+                        connection = Some(stream);
                     }
                 }
 
@@ -41,10 +41,9 @@ impl CameraServer {
                 // in case it ever is this skips to the last sent frame. If
                 // no more frames have been sent we just continue using the
                 // current one.
-                frame = match rx.try_iter().last() {
-                    Some(f) => f,
-                    None => frame,
-                };
+                if let Some(f) = rx.try_iter().last() {
+                    frame = f;
+                }
 
                 if let Some(c) = &mut connection {
                     // Get height and width in big endian byte format and
@@ -86,5 +85,14 @@ impl CameraServer {
         });
 
         Ok(Self { tx })
+    }
+
+    /// Sets the current camera frame that this server will update clients with.
+    #[inline]
+    pub fn set_frame(
+        &mut self,
+        buf: ImageBuffer<<RgbFormat as FormatDecoder>::Output, Vec<u8>>,
+    ) -> Result<(), SendError<ImageBuffer<<RgbFormat as FormatDecoder>::Output, Vec<u8>>>> {
+        self.tx.send(buf)
     }
 }
