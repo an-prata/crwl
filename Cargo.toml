@@ -11,7 +11,13 @@ gilrs = "0.10.1"
 gpio = "0.4.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+image = "0.24.6"
 
 [dependencies.rbtcs]
 path = "./rbtcs"
 version = "0.1.0"
+
+[dependencies.nokhwa]
+version = "0.10.3"
+# Use the native input backends, enable WGPU integration
+features = ["input-native", "output-wgpu"]

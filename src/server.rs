@@ -120,6 +120,14 @@ fn handle_connection(state: &[u8], stream: &mut TcpStream) -> ServerResult<Vec<u
     Ok(recv_state)
 }
 
+/// Represents the type of connection and is to be sent as the first 8 bits of
+/// any connection.
+#[repr(u8)]
+pub enum ConnectionType {
+    SingleExchange,
+    Continuous,
+}
+
 pub type ServerResult<T> = Result<T, ServerError>;
 
 #[derive(Clone, Copy, Debug)]

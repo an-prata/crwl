@@ -4,10 +4,12 @@
 
 use crate::log;
 use gilrs::{Button, GamepadId};
+use nokhwa;
 use rbtcs::{
     bot, gyro,
     headless::{self, DriveMode},
     led_lights, mecanum, motor, serial,
+    vision::cam_server::CameraServer,
 };
 use std::time;
 
@@ -16,6 +18,8 @@ pub struct Crwl {
     drive_mode: DriveMode,
     gyro: gyro::Controller,
     leds: led_lights::Controller,
+    cam: Option<nokhwa::Camera>,
+    cam_server: CameraServer,
     log: log::Logger,
 }
 
@@ -26,6 +30,8 @@ impl Crwl {
     const GYRO_ADDR: u8 = 5u8;
     const LED_ADDR: u8 = 6u8;
 
+    const CAM_SERVER_PORT: u16 = 7001;
+
     const LOG_PATH: &str = "~/crwl.log";
 
     pub fn new() -> Self {
@@ -34,6 +40,14 @@ impl Crwl {
             drive_mode: DriveMode::Relative,
             gyro: gyro::Controller::new(Self::GYRO_ADDR),
             leds: led_lights::Controller::new(Self::LED_ADDR),
+            cam: nokhwa::Camera::new(
+                nokhwa::utils::CameraIndex::Index(0),
+                nokhwa::utils::RequestedFormat::new::<nokhwa::pixel_format::RgbFormat>(
+                    nokhwa::utils::RequestedFormatType::AbsoluteHighestFrameRate,
+                ),
+            )
+            .ok(),
+            cam_server: CameraServer::start(Self::CAM_SERVER_PORT).unwrap(),
             log: log::Logger::new(Self::LOG_PATH).unwrap(),
         }
     }
@@ -53,6 +67,7 @@ impl bot::Bot for Crwl {
         serial_tx: &mut rbtcs::serial::Client,
         serial_rx: &mut rbtcs::serial::Server,
     ) -> bot::BotResult<bot::State> {
+        // Send requests for data from gyro.
         let headers: Vec<gyro::GyroHeader> = self
             .gyro
             .request_all()
@@ -61,6 +76,21 @@ impl bot::Bot for Crwl {
             .filter(|r| r.is_ok())
             .map(|r| r.unwrap())
             .collect();
+
+        if let Some(camera) = self.cam.as_mut() {
+            camera
+                .frame()
+                .ok()
+                .and_then(|f| f.decode_image::<nokhwa::pixel_format::RgbFormat>().ok())
+                .and_then(|f| self.cam_server.set_frame(f).ok())
+                .or_else(|| {
+                    self.log
+                        .log(log::Line::Err(String::from(
+                            "failed to send or get camera frame",
+                        )))
+                        .ok()
+                });
+        }
 
         match serial_tx.send(self.leds.set_color(match state {
             bot::State::Emergency(_) => led_lights::Color::from_rgb(1f32, 0f32, 0f32),
@@ -72,6 +102,7 @@ impl bot::Bot for Crwl {
             ))),
         }?;
 
+        // Receive gyro data and update struct.
         self.gyro.update(
             headers
                 .iter()
