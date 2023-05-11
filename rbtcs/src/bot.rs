@@ -85,7 +85,7 @@ where
             }
         };
 
-        self.state = match match base_state {
+        if let Err(_) = match base_state {
             State::Enabled(t) => self.bot.run_enabled(
                 t.unwrap_or(time::Instant::now()),
                 &mut self.gilrs,
@@ -104,13 +104,10 @@ where
             ),
             State::Emergency(t) => self.bot.run_emergency(t.unwrap_or(time::Instant::now())),
         } {
-            Ok(s) => s,
-            Err(_) => {
-                self.relay
-                    .set_low()
-                    .expect("relay pin should not fail to set ");
-                State::Emergency(Some(time::Instant::now()))
-            }
+            self.relay
+                .set_low()
+                .expect("relay pin should not fail to set ");
+            self.state = State::Emergency(Some(time::Instant::now()));
         };
     }
 

@@ -67,41 +67,34 @@ impl Controller {
         U: serial::Data,
     {
         for p in packets {
-            match <GyroHeader as serial::Header>::extract(p) {
-                Ok(h) => {
-                    let data = <f32 as serial::Data>::extract(p).ok();
+            if let Ok(h) = <GyroHeader as serial::Header>::extract(p) {
+                let data = <f32 as serial::Data>::extract(p).ok();
 
-                    if h.addr != self.addr || data.is_none() {
-                        continue;
-                    }
-
-                    match h.cmd {
-                        Request::Yaw => {
-                            self.yaw = data.and_then(|a| Some(Angle::from_radians(a as f64)))
-                        }
-                        Request::Roll => {
-                            self.roll = data.and_then(|a| Some(Angle::from_radians(a as f64)))
-                        }
-                        Request::Pitch => {
-                            self.pitch = data.and_then(|a| Some(Angle::from_radians(a as f64)))
-                        }
-                        Request::YawPerSec => {
-                            self.yaw_per_sec =
-                                data.and_then(|a| Some(Angle::from_radians(a as f64)))
-                        }
-                        Request::RollPerSec => {
-                            self.roll_per_sec =
-                                data.and_then(|a| Some(Angle::from_radians(a as f64)))
-                        }
-                        Request::PitchPerSec => {
-                            self.pitch_per_sec =
-                                data.and_then(|a| Some(Angle::from_radians(a as f64)))
-                        }
-                    };
+                if h.addr != self.addr || data.is_none() {
+                    continue;
                 }
 
-                Err(_) => continue,
-            };
+                match h.cmd {
+                    Request::Yaw => {
+                        self.yaw = data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                    }
+                    Request::Roll => {
+                        self.roll = data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                    }
+                    Request::Pitch => {
+                        self.pitch = data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                    }
+                    Request::YawPerSec => {
+                        self.yaw_per_sec = data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                    }
+                    Request::RollPerSec => {
+                        self.roll_per_sec = data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                    }
+                    Request::PitchPerSec => {
+                        self.pitch_per_sec = data.and_then(|a| Some(Angle::from_radians(a as f64)))
+                    }
+                };
+            }
         }
 
         self

@@ -88,12 +88,9 @@ impl Server {
             let mut receiver = BitReceiver::new(clock, data);
 
             loop {
-                let rec = match receiver.recv(Packet::<(u8, u8), u32>::BITS as u8) {
-                    Some(p) => p,
-                    None => continue,
-                };
-
-                tx.send(rec).unwrap();
+                if let Some(recv) = receiver.recv(Packet::<(u8, u8), u32>::BITS as u8) {
+                    tx.send(recv).unwrap();
+                }
             }
         });
 
@@ -113,9 +110,8 @@ impl Server {
         T: Header,
     {
         while let Ok(s) = self.rx.try_recv() {
-            match Packet::<(u8, u8), u32>::try_from(s) {
-                Ok(p) => self.backlog.push(p),
-                Err(_) => continue,
+            if let Ok(p) = Packet::<(u8, u8), u32>::try_from(s) {
+                self.backlog.push(p);
             }
         }
 
