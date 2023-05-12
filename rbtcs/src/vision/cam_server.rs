@@ -6,7 +6,9 @@ use image::ImageBuffer;
 use nokhwa::FormatDecoder;
 use nokhwa::{self, pixel_format::RgbFormat};
 use std::net::Shutdown;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SendError;
+use std::sync::Arc;
 use std::{
     io::{self, Write},
     net::{Ipv4Addr, SocketAddrV4, TcpListener},
@@ -16,6 +18,7 @@ use std::{
 
 pub struct CameraServer {
     tx: Sender<ImageBuffer<<RgbFormat as FormatDecoder>::Output, Vec<u8>>>,
+    halt: Arc<AtomicBool>,
 }
 
 impl CameraServer {
@@ -25,16 +28,23 @@ impl CameraServer {
     pub fn start(port: u16) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 0), port))?;
+        let halt = Arc::new(AtomicBool::new(false));
+        let halt_clone = halt.clone();
 
         thread::spawn(move || -> Result<(), RecvError> {
             let mut frame: ImageBuffer<<RgbFormat as FormatDecoder>::Output, _> = rx.recv()?;
             let mut connection = None;
+            let halt = halt_clone;
 
             loop {
                 if connection.is_none() {
                     if let Ok((stream, _)) = listener.accept() {
                         connection = Some(stream);
                     }
+                }
+
+                if halt.load(Ordering::Relaxed) {
+                    break Ok(());
                 }
 
                 // Hopefully the server will never be behind the camera but
@@ -84,15 +94,24 @@ impl CameraServer {
             }
         });
 
-        Ok(Self { tx })
+        Ok(Self { tx, halt })
     }
 
     /// Sets the current camera frame that this server will update clients with.
+    /// The frame may not be the next one sent to clients but will be retreived
+    /// at the before sending the frame after that.
     #[inline]
     pub fn set_frame(
         &mut self,
         buf: ImageBuffer<<RgbFormat as FormatDecoder>::Output, Vec<u8>>,
     ) -> Result<(), SendError<ImageBuffer<<RgbFormat as FormatDecoder>::Output, Vec<u8>>>> {
         self.tx.send(buf)
+    }
+}
+
+impl Drop for CameraServer {
+    fn drop(&mut self) {
+        // Have our thread stop so we dont have dangling threads.
+        self.halt.store(true, Ordering::Relaxed);
     }
 }
