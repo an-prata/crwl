@@ -172,8 +172,14 @@ impl serial::Data for Color {
 
 impl AproxEq for Color {
     fn aprox_eq(&self, other: &Self) -> bool {
-        let (a, b) = (self.rgb(), other.rgb());
-        a.0.aprox_eq(&b.0) && a.1.aprox_eq(&b.1) && a.2.aprox_eq(&b.2)
+        let tup_aprox_eq = |a: &(f32, f32, f32), b: &(f32, f32, f32)| {
+            a.0.aprox_eq(&b.0) && a.1.aprox_eq(&b.1) && a.2.aprox_eq(&b.2)
+        };
+
+        match ((&self.rgb, &self.hsv), (&other.rgb, &other.hsv)) {
+            ((Some(a), _), (Some(b), _)) | ((_, Some(a)), (_, Some(b))) => tup_aprox_eq(a, b),
+            _ => tup_aprox_eq(&self.rgb(), &other.rgb()),
+        }
     }
 }
 
