@@ -3,8 +3,8 @@
 // See LICENSE file in repository root for complete license text.
 
 use crate::{
-    angle::Angle,
     mecanum::{DriveSpeeds, DriveVector},
+    util::angle::Angle,
 };
 
 /// Represents a drive mode, namely the drive's frame of reference for controls.
@@ -39,7 +39,7 @@ pub enum DriveMode {
 /// };
 /// use rbtcs::{
 ///     headless,
-///     angle::Angle,
+///     util::angle::Angle,
 /// };
 ///
 /// // This would move straight forwards normally.

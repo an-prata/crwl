@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use crate::angle::Angle;
+use crate::util::angle::Angle;
 use aprox_eq::AproxEq;
 use std::f64;
 

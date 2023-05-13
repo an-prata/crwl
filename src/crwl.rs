@@ -9,6 +9,7 @@ use rbtcs::{
     bot, gyro,
     headless::{self, DriveMode},
     led_lights, mecanum, motor, serial,
+    util::color::Color,
     vision::cam_server::CameraServer,
 };
 use std::time;
@@ -93,8 +94,8 @@ impl bot::Bot for Crwl {
         }
 
         match serial_tx.send(self.leds.set_color(match state {
-            bot::State::Emergency(_) => led_lights::Color::from_rgb(1f32, 0f32, 0f32),
-            _ => led_lights::Color::from_rgb(1f32, 1f32, 1f32),
+            bot::State::Emergency(_) => Color::from_rgb(1f32, 0f32, 0f32),
+            _ => Color::from_rgb(1f32, 1f32, 1f32),
         })) {
             Ok(_) => Ok(()),
             Err(_) => Err(bot::BotError::new(String::from(

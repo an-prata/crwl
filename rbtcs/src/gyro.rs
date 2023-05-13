@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use crate::{angle::Angle, serial};
+use crate::{serial, util::angle::Angle};
 use std::{error::Error, fmt::Display};
 
 /// Responsible for constructing requests for data from a gyro over the serial
