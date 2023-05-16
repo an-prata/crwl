@@ -3,7 +3,7 @@
 // See LICENSE file in repository root for complete license text.
 
 use crate::serial;
-use crate::util::color::Color;
+use crate::util::color::{Color, RgbValue};
 
 /// Represents an LED light controller on the serial bus.
 pub struct Controller {
@@ -39,7 +39,7 @@ impl Controller {
             },
             match self.color {
                 Some(v) => v,
-                None => Color::from_rgb(0f32, 0f32, 0f32),
+                None => Color::Rgb(RgbValue::new(0f32, 0f32, 0f32)),
             },
         )
     }

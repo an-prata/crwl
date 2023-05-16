@@ -2,107 +2,65 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use aprox_eq::AproxEq;
-
 use crate::serial;
+use aprox_eq::AproxEq;
+use std::u8;
 
-/// Represents a color that can be converted to RGB or HSV.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Color {
-    rgb: Option<(f32, f32, f32)>,
-    hsv: Option<(f32, f32, f32)>,
+#[derive(Clone, Copy, Debug)]
+pub enum Color {
+    Rgb(RgbValue),
+    Hsv(HsvValue),
 }
 
-impl Color {
-    /// Creates a new color given red, green, and blue values. All values will
-    /// be clamped between 0 and 1.
-    #[inline]
-    #[must_use]
-    pub fn from_rgb(r: f32, g: f32, b: f32) -> Self {
-        Self {
-            rgb: Some((
-                r.clamp(0f32, 1f32),
-                g.clamp(0f32, 1f32),
-                b.clamp(0f32, 1f32),
-            )),
-            hsv: None,
-        }
+impl serial::Data for Color {
+    fn extract<U, V>(packet: &serial::Packet<U, V>) -> serial::ExtractionResult<Self>
+    where
+        U: serial::Header,
+        V: serial::Data,
+    {
+        Ok(Self::Rgb(RgbValue::from(packet.data.get())))
     }
 
-    /// Creates a new clor given hue, saturation, and value values. All values
-    /// will be clamped between 0 and 1 except for hue, which is between 0 and
-    /// 360, clamped by `h.abs() % 360`.
-    #[inline]
-    #[must_use]
-    pub fn from_hsv(h: f32, s: f32, v: f32) -> Self {
-        Self {
-            rgb: None,
-            hsv: Some((h.abs() % 360f32, s.clamp(0f32, 1f32), v.clamp(0f32, 1f32))),
-        }
+    fn get(&self) -> u32 {
+        (*self).into()
     }
+}
 
-    /// Creates a new `Color` from a `u32` in which the right most 8 bits are
-    /// the blue value, the next 8 are the green value, and the next 8 are the
-    /// red value.
-    #[must_use]
-    pub fn from_u32(n: u32) -> Self {
-        let r = ((n >> (u8::BITS * 2)) as u8) as f32 / 255f32;
-        let g = ((n >> u8::BITS) as u8) as f32 / 255f32;
-        let b = (n as u8) as f32 / 255f32;
+impl From<Color> for u32 {
+    fn from(value: Color) -> Self {
+        let rgb = match value {
+            Color::Rgb(v) => v,
+            Color::Hsv(v) => v.into(),
+        };
 
-        Self::from_rgb(r, g, b)
+        rgb.into()
     }
+}
 
-    /// Gets the RGB representation of this color.
-    #[inline]
-    #[must_use]
-    pub fn rgb(&self) -> (f32, f32, f32) {
-        match self.rgb {
-            Some(rgb) => rgb,
-            None => match self.hsv {
-                Some(hsv) => self.gen_rgb(hsv),
-                None => panic!("`Color` had no values"),
-            },
-        }
+impl From<u32> for Color {
+    fn from(value: u32) -> Self {
+        value.into()
     }
+}
 
-    /// Gets the HSV representation of this color. Hue values are in degrees and
-    /// between 0 and 360.
-    #[inline]
-    #[must_use]
-    pub fn hsv(&self) -> (f32, f32, f32) {
-        match self.hsv {
-            Some(hsv) => hsv,
-            None => match self.rgb {
-                Some(rgb) => self.gen_hsv(rgb),
-                None => panic!("`Color` had no values"),
-            },
-        }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RgbValue(pub u8, pub u8, pub u8);
+
+impl RgbValue {
+    pub fn from_dec(r: f32, g: f32, b: f32) -> Self {
+        Self((r * 255f32) as u8, (g * 255f32) as u8, (b * 255f32) as u8)
     }
+}
 
-    /// Gets a `u32` in which the right most 8 bits are the B value or RGB,
-    /// between 0 and 255, the next 8 bits to the left would be the G value, and
-    /// the R value is the left 8 bits.
-    #[must_use]
-    pub fn gen_u32(&self) -> u32 {
-        let (r, g, b) = self.rgb();
-
-        0u32 | ((r * 255f32) as u32) << 2u32 * u8::BITS
-            | ((g * 255f32) as u32) << u8::BITS
-            | (b * 255f32) as u32
-    }
-
-    /// Calculates an RGB color truple given an HSV color tuple and caches it in
-    /// `self`.
-    #[must_use]
-    fn gen_rgb(&self, hsv: (f32, f32, f32)) -> (f32, f32, f32) {
-        let (mut h, s, v) = hsv;
+impl From<HsvValue> for RgbValue {
+    fn from(value: HsvValue) -> Self {
+        let h = value.h() / 60f32;
+        let s = value.s();
+        let v = value.v();
 
         if s == 0f32 {
-            return (v, v, v);
+            return Self::from_dec(v, v, v);
         }
-
-        h /= 60f32;
 
         let i = h.trunc() as u16;
         let f = h - i as f32;
@@ -111,83 +69,171 @@ impl Color {
         let q = v * (1f32 - s * f);
         let t = v * (1f32 - s * (1f32 - f));
 
-        let rgb = match i {
-            0 => (v, t, p),
-            1 => (q, v, p),
-            2 => (p, v, t),
-            3 => (p, q, v),
-            4 => (t, p, v),
-            _ => (v, p, q),
-        };
+        match i {
+            0 => Self::from_dec(v, t, p),
+            1 => Self::from_dec(q, v, p),
+            2 => Self::from_dec(p, v, t),
+            3 => Self::from_dec(p, q, v),
+            4 => Self::from_dec(t, p, v),
+            _ => Self::from_dec(v, p, q),
+        }
+    }
+}
 
-        rgb
+impl From<u32> for RgbValue {
+    fn from(value: u32) -> Self {
+        let r = (value >> u8::BITS * 2) as u8;
+        let g = (value >> u8::BITS) as u8;
+        let b = value as u8;
+
+        Self(r, g, b)
+    }
+}
+
+impl From<(u8, u8, u8)> for RgbValue {
+    fn from(value: (u8, u8, u8)) -> Self {
+        Self(value.0, value.1, value.2)
+    }
+}
+
+impl From<RgbValue> for u32 {
+    fn from(value: RgbValue) -> Self {
+        let (r, g, b) = value.into();
+        0u32 | (r as u32) << (u8::BITS * 2) | (g as u32) << u8::BITS | b as u32
+    }
+}
+
+impl From<RgbValue> for (u8, u8, u8) {
+    fn from(value: RgbValue) -> Self {
+        (value.0, value.1, value.2)
+    }
+}
+
+#[derive(AproxEq, Clone, Copy, Debug, PartialEq)]
+pub struct HsvValue(f32, f32, f32);
+
+impl HsvValue {
+    /// Creates a new `HsvValue` given hue, saturation, and value values. When
+    /// stored the given values are clamped between `0f32` and `1f32`, except
+    /// the hue value which is between `0f32` and `360f32`. If a value is `NaN`
+    /// then it is set to `0f32`.
+    #[inline]
+    #[must_use]
+    pub fn new(h: f32, s: f32, v: f32) -> Self {
+        Self(
+            match h.is_nan() {
+                true => 0f32,
+                false => h.clamp(0f32, 360f32),
+            },
+            match s.is_nan() {
+                true => 0f32,
+                false => s.clamp(0f32, 1f32),
+            },
+            match v.is_nan() {
+                true => 0f32,
+                false => v.clamp(0f32, 1f32),
+            },
+        )
     }
 
-    /// Calculates an HSV color truple given an rgb color tuple and caches it in
-    /// `self`.
+    /// Gets the hue component of the `HsvValue`.
+    #[inline]
     #[must_use]
-    fn gen_hsv(&self, rgb: (f32, f32, f32)) -> (f32, f32, f32) {
-        let (r, g, b) = rgb;
+    pub fn h(&self) -> f32 {
+        self.0
+    }
 
+    /// Gets the saturation component of the `HsvValue`.
+    #[inline]
+    #[must_use]
+    pub fn s(&self) -> f32 {
+        self.1
+    }
+
+    /// Gets the value component of the `HsvValue`.
+    #[inline]
+    #[must_use]
+    pub fn v(&self) -> f32 {
+        self.2
+    }
+
+    /// Set this `HsvValue`'s hue component to the given value. Any given value
+    /// will be clamped between `0f32` and `360f32` or set to `0f32` it is
+    /// `NaN`.
+    #[inline]
+    pub fn set_h(&mut self, h: f32) {
+        match h.is_nan() {
+            true => self.0 = 0f32,
+            false => self.0 = h.clamp(0f32, 360f32),
+        }
+    }
+
+    /// Set this `HsvValue`'s green component to the given value. Any given
+    /// value will be clamped between `0f32` and `1f32` or set to `0f32` it is
+    /// `NaN`.
+    #[inline]
+    pub fn set_s(&mut self, s: f32) {
+        match s.is_nan() {
+            true => self.1 = 0f32,
+            false => self.1 = s.clamp(0f32, 1f32),
+        }
+    }
+
+    /// Set this `HsvValue`'s blue component to the given value. Any given value
+    /// will be clamped between `0f32` and `1f32` or set to `0f32` it is `NaN`.
+    #[inline]
+    pub fn set_v(&mut self, v: f32) {
+        match v.is_nan() {
+            true => self.2 = 0f32,
+            false => self.2 = v.clamp(0f32, 1f32),
+        }
+    }
+}
+
+impl From<RgbValue> for HsvValue {
+    fn from(value: RgbValue) -> Self {
+        /// Changes a `u8` to an `f32` between `0f32` and `1f32`.
+        macro_rules! norm {
+            ($n:expr) => {
+                $n as f32 / 255f32
+            };
+        }
+
+        let (r, g, b) = value.into();
         let max = r.max(g).max(b);
         let min = r.min(g).min(b);
 
-        if max == 0f32 {
-            return (0f32, 0f32, 0f32);
+        if max == 0 {
+            return Self::new(0f32, 0f32, 0f32);
         }
 
-        let s = (max - min) / max;
+        let s = (norm!(max) - norm!(min)) / norm!(max);
 
         if s == 0f32 {
-            return (0f32, 0f32, max);
+            return Self::new(0f32, 0f32, (max as f32) / 255f32);
         }
 
         let h = {
             if max == r {
-                (0f32 * 360f32 / 3f32) + (360f32 / 6f32) * (g - b) / (max - min)
+                (0f32 * 360f32 / 3f32)
+                    + (360f32 / 6f32) * (norm!(g) - norm!(b)) / (norm!(max) - norm!(min))
             } else if max == g {
-                (1f32 * 360f32 / 3f32) + (360f32 / 6f32) * (b - r) / (max - min)
+                (1f32 * 360f32 / 3f32)
+                    + (360f32 / 6f32) * (norm!(b) - norm!(r)) / (norm!(max) - norm!(min))
             } else {
-                (2f32 * 360f32 / 3f32) + (360f32 / 6f32) * (r - g) / (max - min)
+                (2f32 * 360f32 / 3f32)
+                    + (360f32 / 6f32) * (norm!(r) - norm!(g)) / (norm!(max) - norm!(min))
             }
         };
 
-        (h, s, max)
-    }
-}
-
-impl serial::Data for Color {
-    fn extract<T, U>(packet: &serial::Packet<T, U>) -> serial::ExtractionResult<Self>
-    where
-        T: serial::Header,
-        U: serial::Data,
-    {
-        Ok(Self::from_u32(packet.data.get()))
-    }
-
-    fn get(&self) -> u32 {
-        self.gen_u32()
-    }
-}
-
-impl AproxEq for Color {
-    fn aprox_eq(&self, other: &Self) -> bool {
-        let tup_aprox_eq = |a: &(f32, f32, f32), b: &(f32, f32, f32)| {
-            a.0.aprox_eq(&b.0) && a.1.aprox_eq(&b.1) && a.2.aprox_eq(&b.2)
-        };
-
-        match ((&self.rgb, &self.hsv), (&other.rgb, &other.hsv)) {
-            ((Some(a), _), (Some(b), _)) | ((_, Some(a)), (_, Some(b))) => tup_aprox_eq(a, b),
-            _ => tup_aprox_eq(&self.rgb(), &other.rgb()),
-        }
+        Self::new(h, s, norm!(max))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use aprox_eq::assert_aprox_eq;
-
     use super::Color;
+    use aprox_eq::assert_aprox_eq;
 
     #[test]
     pub fn hsv_to_rgb() {
