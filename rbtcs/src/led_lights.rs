@@ -27,9 +27,14 @@ impl Controller {
         self.gen_packet()
     }
 
-    /// Generates a `serial::Packet<LedHeader>` for sending using a
-    /// `serial::Client`. This packet will instruct the LED light controller to
-    /// match the state of `self`.
+    /// Generates a [`serial::Packet`] wth and [`LedHeader`] and [`Color`] for
+    /// sending using a [`serial::Client`]. This packet will instruct the LED
+    /// light controller to match the state of `self`.
+    ///
+    /// [`serial::Packet`]: serial::Packet
+    /// [`serial::Client`]: serial::Client
+    /// [`LedHeader`]: LedHeader
+    /// [`Color`]: Color
     #[must_use]
     pub fn gen_packet(&mut self) -> serial::Packet<LedHeader, Color> {
         serial::Packet::new(
@@ -39,7 +44,7 @@ impl Controller {
             },
             match self.color {
                 Some(v) => v,
-                None => Color::Rgb(RgbValue::new(0f32, 0f32, 0f32)),
+                None => Color::Rgb(RgbValue::new(0u8, 0u8, 0u8)),
             },
         )
     }
@@ -59,8 +64,8 @@ impl serial::Header for LedHeader {
         U: serial::Data,
     {
         match packet.head.get() {
-            (a, c) if c == LedCommand::Set as u8 => Ok(Self {
-                addr: a,
+            (addr, cmd) if cmd == LedCommand::Set as u8 => Ok(Self {
+                addr,
                 cmd: LedCommand::Set,
             }),
 

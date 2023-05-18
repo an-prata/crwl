@@ -6,6 +6,14 @@ use crate::serial;
 use aprox_eq::AproxEq;
 use std::u8;
 
+/// A color that can be stored and represented in different ways.
+///
+/// Because this enum must be stored in memory with the size of the largest of
+/// its members it is most efficient to store colors as [`RgbValue`] instances
+/// without the [`Color`] enum.
+///
+/// [`RgbValue`]: RgbValue
+/// [`Color`]: Color
 #[derive(Clone, Copy, Debug)]
 pub enum Color {
     Rgb(RgbValue),
@@ -28,12 +36,11 @@ impl serial::Data for Color {
 
 impl From<Color> for u32 {
     fn from(value: Color) -> Self {
-        let rgb = match value {
+        match value {
             Color::Rgb(v) => v,
             Color::Hsv(v) => v.into(),
-        };
-
-        rgb.into()
+        }
+        .into()
     }
 }
 
@@ -43,12 +50,48 @@ impl From<u32> for Color {
     }
 }
 
+impl AproxEq for Color {
+    fn aprox_eq(&self, other: &Self) -> bool {
+        let hsv0 = match self {
+            Color::Rgb(c) => c.clone().into(),
+            Color::Hsv(c) => c.clone(),
+        };
+
+        let hsv1 = match other {
+            Color::Rgb(c) => c.clone().into(),
+            Color::Hsv(c) => c.clone(),
+        };
+
+        hsv0.aprox_eq(&hsv1)
+    }
+}
+
+/// Represents an RGB color.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RgbValue(pub u8, pub u8, pub u8);
+pub struct RgbValue {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
 
 impl RgbValue {
+    /// Create a new [`RgbValue`] from the given values.
+    ///
+    /// [`RgbValue`]: RgbValue
+    pub fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+
+    /// Creates a new [`RgbValue`] given decimal values assumed to be between
+    /// `0f32` and `1f32`. All given values are cast to `u8`.
+    ///
+    /// [`RgbValue`]: RgbValue
     pub fn from_dec(r: f32, g: f32, b: f32) -> Self {
-        Self((r * 255f32) as u8, (g * 255f32) as u8, (b * 255f32) as u8)
+        Self {
+            r: (r * 255f32) as u8,
+            g: (g * 255f32) as u8,
+            b: (b * 255f32) as u8,
+        }
     }
 }
 
@@ -86,13 +129,17 @@ impl From<u32> for RgbValue {
         let g = (value >> u8::BITS) as u8;
         let b = value as u8;
 
-        Self(r, g, b)
+        Self { r, g, b }
     }
 }
 
 impl From<(u8, u8, u8)> for RgbValue {
     fn from(value: (u8, u8, u8)) -> Self {
-        Self(value.0, value.1, value.2)
+        Self {
+            r: value.0,
+            g: value.1,
+            b: value.2,
+        }
     }
 }
 
@@ -105,18 +152,22 @@ impl From<RgbValue> for u32 {
 
 impl From<RgbValue> for (u8, u8, u8) {
     fn from(value: RgbValue) -> Self {
-        (value.0, value.1, value.2)
+        (value.r, value.g, value.b)
     }
 }
 
+/// A color as represented with HSV. This stuct guarantees that its contents are
+/// a valid color and contains no infinite values or `NaN` values.
 #[derive(AproxEq, Clone, Copy, Debug, PartialEq)]
 pub struct HsvValue(f32, f32, f32);
 
 impl HsvValue {
-    /// Creates a new `HsvValue` given hue, saturation, and value values. When
+    /// Creates a new [`HsvValue`] given hue, saturation, and value values. When
     /// stored the given values are clamped between `0f32` and `1f32`, except
     /// the hue value which is between `0f32` and `360f32`. If a value is `NaN`
     /// then it is set to `0f32`.
+    ///
+    /// [`HsvValue`]: HsvValue
     #[inline]
     #[must_use]
     pub fn new(h: f32, s: f32, v: f32) -> Self {
@@ -136,30 +187,38 @@ impl HsvValue {
         )
     }
 
-    /// Gets the hue component of the `HsvValue`.
+    /// Gets the hue component of the [`HsvValue`].
+    ///
+    /// [`HsvValue`]: HsvValue
     #[inline]
     #[must_use]
     pub fn h(&self) -> f32 {
         self.0
     }
 
-    /// Gets the saturation component of the `HsvValue`.
+    /// Gets the saturation component of the [`HsvValue`].
+    ///
+    /// [`HsvValue`]: HsvValue
     #[inline]
     #[must_use]
     pub fn s(&self) -> f32 {
         self.1
     }
 
-    /// Gets the value component of the `HsvValue`.
+    /// Gets the value component of the [`HsvValue`].
+    ///
+    /// [`HsvValue`]: HsvValue
     #[inline]
     #[must_use]
     pub fn v(&self) -> f32 {
         self.2
     }
 
-    /// Set this `HsvValue`'s hue component to the given value. Any given value
-    /// will be clamped between `0f32` and `360f32` or set to `0f32` it is
+    /// Set this [`HsvValue`]'s hue component to the given value. Any given
+    /// value will be clamped between `0f32` and `360f32` or set to `0f32` it is
     /// `NaN`.
+    ///
+    /// [`HsvValue`]: HsvValue
     #[inline]
     pub fn set_h(&mut self, h: f32) {
         match h.is_nan() {
@@ -168,9 +227,11 @@ impl HsvValue {
         }
     }
 
-    /// Set this `HsvValue`'s green component to the given value. Any given
-    /// value will be clamped between `0f32` and `1f32` or set to `0f32` it is
-    /// `NaN`.
+    /// Set this [`HsvValue`]'s saturation component to the given value. Any
+    /// given value will be clamped between `0f32` and `1f32` or set to `0f32`
+    /// it is `NaN`.
+    ///
+    /// [`HsvValue`]: HsvValue
     #[inline]
     pub fn set_s(&mut self, s: f32) {
         match s.is_nan() {
@@ -179,8 +240,11 @@ impl HsvValue {
         }
     }
 
-    /// Set this `HsvValue`'s blue component to the given value. Any given value
-    /// will be clamped between `0f32` and `1f32` or set to `0f32` it is `NaN`.
+    /// Set this [`HsvValue`]'s value component to the given value. Any given
+    /// value will be clamped between `0f32` and `1f32` or set to `0f32` it is
+    /// `NaN`.
+    ///
+    /// [`HsvValue`]: HsvValue
     #[inline]
     pub fn set_v(&mut self, v: f32) {
         match v.is_nan() {
@@ -232,40 +296,45 @@ impl From<RgbValue> for HsvValue {
 
 #[cfg(test)]
 mod tests {
-    use super::Color;
+    use super::{Color, HsvValue, RgbValue};
     use aprox_eq::assert_aprox_eq;
 
     #[test]
     pub fn hsv_to_rgb() {
         let color_pairs = [
             (
-                Color::from_rgb(1f32, 0f32, 0f32),
-                Color::from_hsv(0f32, 1f32, 1f32),
+                Color::Rgb(RgbValue::new(255u8, 0u8, 0u8)),
+                Color::Hsv(HsvValue::new(0f32, 1f32, 1f32)),
             ),
             (
-                Color::from_rgb(0f32, 1f32, 0f32),
-                Color::from_hsv(120f32, 1f32, 1f32),
+                Color::Rgb(RgbValue::new(0u8, 255u8, 0u8)),
+                Color::Hsv(HsvValue::new(120f32, 1f32, 1f32)),
             ),
             (
-                Color::from_rgb(0f32, 0f32, 1f32),
-                Color::from_hsv(240f32, 1f32, 1f32),
+                Color::Rgb(RgbValue::from_dec(0f32, 0f32, 1f32)),
+                Color::Hsv(HsvValue::new(240f32, 1f32, 1f32)),
             ),
             (
-                Color::from_rgb(0.5f32, 0.5f32, 0.5f32),
-                Color::from_hsv(0f32, 0f32, 0.5f32),
+                Color::Rgb(RgbValue::from_dec(0f32, 0f32, 0f32)),
+                Color::Hsv(HsvValue::new(0f32, 0f32, 0f32)),
             ),
         ];
 
         for (rgb, hsv) in color_pairs {
             assert_aprox_eq!(rgb, hsv);
 
-            assert_aprox_eq!(rgb.rgb().0, hsv.rgb().0);
-            assert_aprox_eq!(rgb.rgb().1, hsv.rgb().1);
-            assert_aprox_eq!(rgb.rgb().2, hsv.rgb().2);
+            let rgb = match rgb {
+                Color::Rgb(v) => v,
+                Color::Hsv(_) => panic!("expected `RgbValue`"),
+            };
 
-            assert_aprox_eq!(rgb.hsv().0, hsv.hsv().0);
-            assert_aprox_eq!(rgb.hsv().1, hsv.hsv().1);
-            assert_aprox_eq!(rgb.hsv().2, hsv.hsv().2);
+            let hsv = match hsv {
+                Color::Rgb(_) => panic!("expected `HsvValue`"),
+                Color::Hsv(v) => v,
+            };
+
+            assert_eq!(rgb, hsv.into());
+            assert_aprox_eq!(<RgbValue as Into<HsvValue>>::into(rgb), hsv);
         }
     }
 }
