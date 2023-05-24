@@ -3,22 +3,23 @@
 // See LICENSE file in repository root for complete license text.
 
 use image::ImageBuffer;
-use nokhwa::FormatDecoder;
-use nokhwa::{self, pixel_format::RgbFormat};
-use std::net::Shutdown;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::SendError;
-use std::sync::Arc;
+use nokhwa::{self, pixel_format::RgbFormat, FormatDecoder};
 use std::{
     io::{self, Write},
-    net::{Ipv4Addr, SocketAddrV4, TcpListener},
-    sync::mpsc::{self, RecvError, Sender},
+    net::{Ipv4Addr, Shutdown, SocketAddrV4, TcpListener},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, RecvError, SendError, Sender},
+        Arc,
+    },
     thread,
 };
 
+pub struct CameraClient {}
+
 pub struct CameraServer {
     tx: Sender<ImageBuffer<<RgbFormat as FormatDecoder>::Output, Vec<u8>>>,
-    halt: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
 }
 
 impl CameraServer {
@@ -28,13 +29,13 @@ impl CameraServer {
     pub fn start(port: u16) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 0), port))?;
-        let halt = Arc::new(AtomicBool::new(false));
-        let halt_clone = halt.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = stop.clone();
 
         thread::spawn(move || -> Result<(), RecvError> {
             let mut frame: ImageBuffer<<RgbFormat as FormatDecoder>::Output, _> = rx.recv()?;
             let mut connection = None;
-            let halt = halt_clone;
+            let stop = stop_clone;
 
             loop {
                 if connection.is_none() {
@@ -43,7 +44,7 @@ impl CameraServer {
                     }
                 }
 
-                if halt.load(Ordering::Relaxed) {
+                if stop.load(Ordering::Relaxed) {
                     break Ok(());
                 }
 
@@ -94,7 +95,7 @@ impl CameraServer {
             }
         });
 
-        Ok(Self { tx, halt })
+        Ok(Self { tx, stop })
     }
 
     /// Sets the current camera frame that this server will update clients with.
@@ -112,6 +113,6 @@ impl CameraServer {
 impl Drop for CameraServer {
     fn drop(&mut self) {
         // Have our thread stop so we dont have dangling threads.
-        self.halt.store(true, Ordering::Relaxed);
+        self.stop.store(true, Ordering::Relaxed);
     }
 }
