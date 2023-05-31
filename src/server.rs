@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
+use crate::log;
 use serde_json;
 use std::{
     error::Error,
@@ -16,8 +17,6 @@ use std::{
     },
     thread::{self, JoinHandle},
 };
-
-use crate::log;
 
 pub struct Server {
     tx: mpsc::Sender<String>,

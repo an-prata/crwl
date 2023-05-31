@@ -5,6 +5,7 @@
 mod crwl;
 mod log;
 mod server;
+mod state;
 
 use rbtcs::bot;
 

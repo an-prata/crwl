@@ -2,17 +2,20 @@
 // Licensed under the MIT License.
 // See LICENSE file in repository root for complete license text.
 
-use crate::log;
+use crate::{log, server::Server};
 use gilrs::{Button, GamepadId};
 use nokhwa;
 use rbtcs::{
     bot, gyro,
     headless::{self, DriveMode},
     led_lights, mecanum, motor, serial,
-    util::color::Color,
+    util::color::{Color, RgbValue},
     vision::cam_server::CameraServer,
 };
-use std::time;
+use std::{
+    net::{Ipv4Addr, SocketAddrV4},
+    time,
+};
 
 pub struct Crwl {
     motors: [motor::Controller; 4],
@@ -20,6 +23,7 @@ pub struct Crwl {
     gyro: gyro::Controller,
     leds: led_lights::Controller,
     cam: Option<nokhwa::Camera>,
+    server: Server,
     cam_server: CameraServer,
     log: log::Logger,
 }
@@ -31,11 +35,14 @@ impl Crwl {
     const GYRO_ADDR: u8 = 5u8;
     const LED_ADDR: u8 = 6u8;
 
+    const SERVER_PORT: u16 = 7000;
     const CAM_SERVER_PORT: u16 = 7001;
 
     const LOG_PATH: &str = "~/crwl.log";
 
     pub fn new() -> Self {
+        let mut log = log::Logger::new(Self::LOG_PATH).unwrap();
+
         Self {
             motors: Self::MOTOR_ADDRS.map(|a| motor::Controller::new(a)),
             drive_mode: DriveMode::Relative,
@@ -48,8 +55,16 @@ impl Crwl {
                 ),
             )
             .ok(),
+            server: Server::new(
+                std::net::SocketAddr::V4(SocketAddrV4::new(
+                    Ipv4Addr::new(127, 0, 0, 0),
+                    Self::SERVER_PORT,
+                )),
+                log.branch(),
+            )
+            .unwrap(),
             cam_server: CameraServer::start(Self::CAM_SERVER_PORT).unwrap(),
-            log: log::Logger::new(Self::LOG_PATH).unwrap(),
+            log,
         }
     }
 }
@@ -94,8 +109,8 @@ impl bot::Bot for Crwl {
         }
 
         match serial_tx.send(self.leds.set_color(match state {
-            bot::State::Emergency(_) => Color::from_rgb(1f32, 0f32, 0f32),
-            _ => Color::from_rgb(1f32, 1f32, 1f32),
+            bot::State::Emergency(_) => Color::Rgb(RgbValue::new(255u8, 0u8, 255u8)),
+            _ => Color::Rgb(RgbValue::new(255u8, 255u8, 255u8)),
         })) {
             Ok(_) => Ok(()),
             Err(_) => Err(bot::BotError::new(String::from(
@@ -113,6 +128,13 @@ impl bot::Bot for Crwl {
                 .collect::<Vec<serial::Packet<_, _>>>()
                 .as_slice(),
         );
+
+        let serv_state = crate::state::State::new(
+            self.drive_mode.clone(),
+            self.motors.map(|m| m.speed()),
+            &self.gyro,
+        );
+        self.server.set_state(serv_state);
 
         Ok(state)
     }
