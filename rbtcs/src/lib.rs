@@ -10,4 +10,3 @@ pub mod mecanum;
 pub mod motor;
 pub mod serial;
 pub mod util;
-pub mod vision;
