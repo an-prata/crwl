@@ -6,9 +6,10 @@ use crate::{
     mecanum::{DriveSpeeds, DriveVector},
     util::angle::Angle,
 };
+use serde::{Deserialize, Serialize};
 
 /// Represents a drive mode, namely the drive's frame of reference for controls.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub enum DriveMode {
     Headless(Angle),
     Relative,

@@ -7,7 +7,7 @@ use core::fmt;
 use std::error::Error;
 
 /// A scruct for interfacing with an arduino motor controller.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Controller {
     /// Address of motor on the serial bus.
     addr: u8,

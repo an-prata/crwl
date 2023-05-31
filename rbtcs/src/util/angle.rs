@@ -3,6 +3,7 @@
 // See LICENSE file in repository root for complete license text.
 
 use aprox_eq::AproxEq;
+use serde::{Deserialize, Serialize};
 use std::{
     f64,
     fmt::{self, Display, Formatter},
@@ -15,7 +16,7 @@ use std::{
 /// will however preserve direction, -90 degrees and 90 degrees are considered
 /// distinct. The struct also guarantees that all measurements retrieved from it
 /// will be less that one full rotation.
-#[derive(AproxEq, Clone, Debug, Copy, PartialEq, Default)]
+#[derive(AproxEq, Clone, Debug, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Angle {
     /// The fraction of a circle that this angle represents, all other
     /// measurements are derrived by converting this value, which is kept
