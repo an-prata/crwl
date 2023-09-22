@@ -44,7 +44,7 @@ impl Controller {
             },
             match self.color {
                 Some(v) => v,
-                None => Color::Rgb(RgbValue::new(0u8, 0u8, 0u8)),
+                None => Color::Rgb(RgbValue::from_dec(0f32, 0f32, 0f32)),
             },
         )
     }

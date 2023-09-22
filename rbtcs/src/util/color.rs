@@ -52,27 +52,34 @@ impl serial::Data for Color {
     }
 }
 
+impl From<Color> for u32 {
+    fn from(value: Color) -> Self {
+        match value {
+            Color::Rgb(v) => v,
+            Color::Hsv(v) => v.into(),
+        }
+        .into()
+    }
+}
+
 impl From<u32> for Color {
     fn from(value: u32) -> Self {
         value.into()
     }
 }
 
-impl AproxEq for Color {
-    fn aprox_eq(&self, other: &Self) -> bool {
-        let hsv0 = match self {
-            Color::Rgb(c) => c.clone().into(),
-            Color::RgbFloat(c) => c.clone().into(),
-            Color::Hsv(c) => c.clone(),
-        };
+/// Represents a single RGB color value composed of three unsigned eight bit
+/// integers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RgbValue(pub u8, pub u8, pub u8);
 
-        let hsv1 = match other {
-            Color::Rgb(c) => c.clone().into(),
-            Color::RgbFloat(c) => c.clone().into(),
-            Color::Hsv(c) => c.clone(),
-        };
-
-        hsv0.aprox_eq(&hsv1)
+impl RgbValue {
+    /// Creates a new [`RgbValue`] given decimal values which are presumed to
+    /// be between `0f32` and `1f32`.
+    ///
+    /// [`RgbValue`]: RgbValue
+    pub fn from_dec(r: f32, g: f32, b: f32) -> Self {
+        Self((r * 255f32) as u8, (g * 255f32) as u8, (b * 255f32) as u8)
     }
 }
 
