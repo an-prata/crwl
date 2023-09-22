@@ -59,13 +59,12 @@ impl Client {
     /// unless they trigger a device to send a packet, in which case they may
     /// require more careful timing.
     #[inline]
-    pub fn send<U, V>(&mut self, packet: Packet<U, V>) -> Result<U, SendError<SerialData>>
+    pub fn send<U>(&mut self, data: U) -> Result<(), SendError<SerialData>>
     where
-        U: Header,
-        V: Data,
+        U: Into<SerialData>,
     {
-        self.tx.send(packet.into())?;
-        Ok(packet.head)
+        self.tx.send(data.into())?;
+        Ok(())
     }
 }
 
@@ -84,7 +83,7 @@ impl Server {
     {
         let (tx, rx) = mpsc::channel();
 
-        thread::spawn(move || -> Result<(), T::Error> {
+        thread::spawn(move || -> ! {
             let mut receiver = BitReceiver::new(clock, data);
 
             loop {
@@ -135,7 +134,7 @@ impl Server {
 /// start of a new packet, this does not mean that double up is the start state,
 /// only that change from data while clock is up is, they should change at the
 /// same time.
-struct BitSender<T: GpioOut> {
+pub(crate) struct BitSender<T: GpioOut> {
     clock: T,
     data: T,
     cycle: Duration,
@@ -189,7 +188,7 @@ impl<T: GpioOut> BitSender<T> {
 /// Struct for receiving bits on a serial bus, since the instance belongs to the
 /// controller device all addresses in packets are the address of the sending
 /// device, not the recipiant.
-struct BitReceiver<T: GpioIn> {
+pub(crate) struct BitReceiver<T: GpioIn> {
     clock: T,
     data: T,
 }
@@ -423,7 +422,7 @@ impl Header for (u8, u8) {
         Ok(packet.head.get())
     }
 
-    fn get(&self) -> Self {
+    fn get(&self) -> (u8, u8) {
         *self
     }
 }

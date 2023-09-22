@@ -8,5 +8,6 @@ pub mod headless;
 pub mod led_lights;
 pub mod mecanum;
 pub mod motor;
+pub mod sc_serial;
 pub mod serial;
 pub mod util;
