@@ -9,11 +9,3 @@ edition = "2021"
 aprox_eq = "1.3.0"
 gpio = "0.4.1"
 gilrs = "0.10.1"
-image = "0.24.6"
-minifb = "0.24.0"
-serde = { version = "1.0", features = ["derive"] }
-
-[dependencies.nokhwa]
-version = "0.10.3"
-# Use the native input backends, enable WGPU integration
-features = ["input-native", "output-wgpu"]
