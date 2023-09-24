@@ -4,13 +4,11 @@
 
 use crate::{log, server::Server};
 use gilrs::{Button, GamepadId};
-use nokhwa;
 use rbtcs::{
     bot, gyro,
     headless::{self, DriveMode},
     led_lights, mecanum, motor, serial,
     util::color::{Color, RgbValue},
-    vision::cam_server::CameraServer,
 };
 use std::{
     net::{Ipv4Addr, SocketAddrV4},
@@ -22,9 +20,7 @@ pub struct Crwl {
     drive_mode: DriveMode,
     gyro: gyro::Controller,
     leds: led_lights::Controller,
-    cam: Option<nokhwa::Camera>,
     server: Server,
-    cam_server: CameraServer,
     log: log::Logger,
 }
 
@@ -48,13 +44,6 @@ impl Crwl {
             drive_mode: DriveMode::Relative,
             gyro: gyro::Controller::new(Self::GYRO_ADDR),
             leds: led_lights::Controller::new(Self::LED_ADDR),
-            cam: nokhwa::Camera::new(
-                nokhwa::utils::CameraIndex::Index(0),
-                nokhwa::utils::RequestedFormat::new::<nokhwa::pixel_format::RgbFormat>(
-                    nokhwa::utils::RequestedFormatType::AbsoluteHighestFrameRate,
-                ),
-            )
-            .ok(),
             server: Server::new(
                 std::net::SocketAddr::V4(SocketAddrV4::new(
                     Ipv4Addr::new(127, 0, 0, 0),
@@ -63,7 +52,6 @@ impl Crwl {
                 log.branch(),
             )
             .unwrap(),
-            cam_server: CameraServer::start(Self::CAM_SERVER_PORT).unwrap(),
             log,
         }
     }
@@ -92,21 +80,6 @@ impl bot::Bot for Crwl {
             .filter(|r| r.is_ok())
             .map(|r| r.unwrap())
             .collect();
-
-        if let Some(camera) = self.cam.as_mut() {
-            camera
-                .frame()
-                .ok()
-                .and_then(|f| f.decode_image::<nokhwa::pixel_format::RgbFormat>().ok())
-                .and_then(|f| self.cam_server.set_frame(f).ok())
-                .or_else(|| {
-                    self.log
-                        .log(log::Line::Err(String::from(
-                            "failed to send or get camera frame",
-                        )))
-                        .ok()
-                });
-        }
 
         match serial_tx.send(self.leds.set_color(match state {
             bot::State::Emergency(_) => Color::Rgb(RgbValue::new(255u8, 0u8, 255u8)),

@@ -59,12 +59,13 @@ impl Client {
     /// unless they trigger a device to send a packet, in which case they may
     /// require more careful timing.
     #[inline]
-    pub fn send<U>(&mut self, data: U) -> Result<(), SendError<SerialData>>
+    pub fn send<T, U>(&mut self, packet: Packet<T, U>) -> Result<T, SendError<SerialData>>
     where
-        U: Into<SerialData>,
+        T: Header,
+        U: Data,
     {
-        self.tx.send(data.into())?;
-        Ok(())
+        self.tx.send(packet.into())?;
+        Ok(packet.head)
     }
 }
 

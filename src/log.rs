@@ -77,12 +77,14 @@ impl Logger {
     /// Logs all `Line` instances queued by `Sender` instances returned from
     /// `Log::branch()`.
     #[inline]
-    pub fn log_queued(&mut self) {
-        for rx in self.rx {
-            for line in rx.try_iter() {
-                self.log(line);
-            }
+    pub fn log_queued(&mut self) -> io::Result<()> {
+        let lines: Vec<_> = self.rx.iter().map(|rx| rx.try_iter()).flatten().collect();
+
+        for line in lines {
+            self.log(line)?;
         }
+
+        Ok(())
     }
 
     /// Produces a channel for sending `Line` instances, stores the `Receiver`,
